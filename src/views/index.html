@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM Workbench</title>
+  <link rel="stylesheet" href="/css/output.css">
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen flex flex-col">
+
+  <!-- Header -->
+  <header class="border-b border-zinc-800 px-6 py-4">
+    <div class="max-w-4xl mx-auto flex items-center justify-between">
+      <h1 class="text-lg font-semibold tracking-tight">LLM Workbench</h1>
+      <span class="text-xs text-zinc-500">v0.1.0</span>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <main class="flex-1 flex flex-col max-w-4xl w-full mx-auto px-6 py-8">
+
+    <!-- Response area -->
+    <div id="response-area" class="flex-1 mb-6 space-y-4 overflow-y-auto">
+      <div class="text-zinc-500 text-sm text-center py-20">
+        Send a prompt to get started.
+      </div>
+    </div>
+
+    <!-- Prompt input -->
+    <form id="prompt-form" class="border border-zinc-800 rounded-xl bg-zinc-900 p-4 shadow-lg">
+      <textarea
+        id="prompt-input"
+        name="prompt"
+        rows="3"
+        placeholder="Type your prompt here..."
+        class="w-full bg-transparent text-zinc-100 placeholder-zinc-600 resize-none outline-none text-sm leading-relaxed"
+      ></textarea>
+      <div class="flex items-center justify-between mt-3 pt-3 border-t border-zinc-800">
+        <div class="flex items-center gap-3">
+          <select
+            id="model-select"
+            class="bg-zinc-800 text-zinc-300 text-xs rounded-lg px-3 py-1.5 border border-zinc-700 outline-none focus:border-zinc-500"
+          >
+            <option value="placeholder">Placeholder</option>
+          </select>
+        </div>
+        <button
+          type="submit"
+          class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-5 py-1.5 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Send
+        </button>
+      </div>
+    </form>
+  </main>
+
+</body>
+<script src="/js/app.js"></script>
+</html>

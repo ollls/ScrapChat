@@ -1,0 +1,23 @@
+{
+  "name": "llm-workbench",
+  "version": "0.1.0",
+  "description": "LLM Workbench - prompt interface with memory management and RAG",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "css:build": "npx @tailwindcss/cli -i src/public/css/input.css -o src/public/css/output.css",
+    "css:watch": "npx @tailwindcss/cli -i src/public/css/input.css -o src/public/css/output.css --watch",
+    "build": "npm run css:build"
+  },
+  "keywords": [
+    "llm",
+    "ai",
+    "rag"
+  ],
+  "license": "ISC",
+  "dependencies": {
+    "@tailwindcss/cli": "^4.2.1",
+    "express": "^5.2.1"
+  }
+}
