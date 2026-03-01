@@ -191,8 +191,26 @@ async function sendMessage(content) {
   const bubble = appendMessage('assistant', '');
   sendBtn.disabled = true;
 
+  // Create a collapsed reasoning block inside the bubble
+  const reasoningDetails = document.createElement('details');
+  reasoningDetails.className = 'mb-2 text-zinc-500 text-xs';
+  const reasoningSummary = document.createElement('summary');
+  reasoningSummary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
+  reasoningSummary.textContent = 'Thinking…';
+  const reasoningBody = document.createElement('pre');
+  reasoningBody.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-60 overflow-y-auto slim-scrollbar';
+  reasoningDetails.appendChild(reasoningSummary);
+  reasoningDetails.appendChild(reasoningBody);
+
+  const contentSpan = document.createElement('span');
+  bubble.textContent = '';
+  bubble.appendChild(contentSpan);
+
+  let hasReasoning = false;
+
   state.abortController = new AbortController();
   let accumulated = '';
+  let accumulatedReasoning = '';
 
   try {
     const res = await fetch(`/api/conversations/${state.currentConversationId}/messages`, {
@@ -221,9 +239,19 @@ async function sendMessage(content) {
           if (payload === '[DONE]') continue;
           try {
             const data = JSON.parse(payload);
+            if (data.reasoning) {
+              if (!hasReasoning) {
+                hasReasoning = true;
+                bubble.insertBefore(reasoningDetails, contentSpan);
+              }
+              accumulatedReasoning += data.reasoning;
+              reasoningBody.textContent = accumulatedReasoning;
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
             if (data.content) {
+              if (hasReasoning) reasoningSummary.textContent = 'Thought process';
               accumulated += data.content;
-              bubble.textContent = accumulated;
+              contentSpan.textContent = accumulated;
               responseArea.scrollTop = responseArea.scrollHeight;
             }
             if (data.usage) {

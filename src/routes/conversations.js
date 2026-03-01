@@ -78,11 +78,19 @@ router.post('/:id/messages', async (req, res) => {
     });
 
     for await (const chunk of parseSSEChunks(upstream)) {
-      const delta = chunk.choices?.[0]?.delta?.content;
-      if (delta) {
-        accumulated += delta;
+      const delta = chunk.choices?.[0]?.delta;
+      if (!delta) continue;
+
+      // Reasoning content (thinking models like Qwen3)
+      if (delta.reasoning_content) {
+        res.write(`data: ${JSON.stringify({ reasoning: delta.reasoning_content })}\n\n`);
+      }
+
+      // Regular content
+      if (delta.content) {
+        accumulated += delta.content;
         conversations.updateMessageContent(conv.id, msgIndex, accumulated);
-        res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
+        res.write(`data: ${JSON.stringify({ content: delta.content })}\n\n`);
       }
 
       // Usage info on final chunk
