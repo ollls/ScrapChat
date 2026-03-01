@@ -11,4 +11,15 @@ router.get('/', async (_req, res) => {
   res.json(health);
 });
 
+router.get('/internet', async (_req, res) => {
+  try {
+    const resp = await fetch('https://1.1.1.1/cdn-cgi/trace', {
+      signal: AbortSignal.timeout(3000),
+    });
+    res.json({ ok: resp.ok });
+  } catch {
+    res.json({ ok: false });
+  }
+});
+
 export default router;

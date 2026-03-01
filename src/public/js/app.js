@@ -23,6 +23,8 @@ const slotPanel = document.getElementById('slot-panel');
 const slotCards = document.getElementById('slot-cards');
 const contextBar = document.getElementById('context-bar');
 const contextLabel = document.getElementById('context-label');
+const inetDot = document.getElementById('inet-dot');
+const inetLabel = document.getElementById('inet-label');
 
 // ── API layer ─────────────────────────────────────────
 const api = {
@@ -479,6 +481,21 @@ async function pollHealth() {
   }
 }
 
+// ── Internet check ────────────────────────────────────
+async function pollInternet() {
+  try {
+    const res = await fetch('/api/health/internet');
+    const { ok } = await res.json();
+    inetDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
+    inetLabel.textContent = ok ? 'Internet' : 'Offline';
+    inetLabel.className = ok ? 'text-green-500' : 'text-red-400';
+  } catch {
+    inetDot.className = 'inline-block w-2 h-2 rounded-full bg-red-500';
+    inetLabel.textContent = 'Offline';
+    inetLabel.className = 'text-red-400';
+  }
+}
+
 // ── Slot panel ────────────────────────────────────────
 let slotPanelOpen = false;
 
@@ -624,6 +641,8 @@ input.addEventListener('keydown', (e) => {
   await refreshSidebar();
   pollHealth();
   setInterval(pollHealth, 5000);
+  pollInternet();
+  setInterval(pollInternet, 30000);
   refreshSlots();
   setInterval(refreshSlots, 5000);
 })();
