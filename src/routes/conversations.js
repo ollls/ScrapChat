@@ -93,11 +93,14 @@ router.post('/:id/messages', async (req, res) => {
         res.write(`data: ${JSON.stringify({ content: delta.content })}\n\n`);
       }
 
-      // Usage info on final chunk
-      if (chunk.usage) {
-        const tokenCount = chunk.usage.total_tokens || chunk.usage.completion_tokens || 0;
-        conversations.setTokenCount(conv.id, tokenCount);
-        res.write(`data: ${JSON.stringify({ usage: chunk.usage })}\n\n`);
+      // Usage info on final chunk (llama.cpp sends timings, not usage)
+      const timings = chunk.timings || chunk.usage;
+      if (timings) {
+        const prompt = timings.prompt_n ?? timings.prompt_tokens ?? 0;
+        const predicted = timings.predicted_n ?? timings.completion_tokens ?? 0;
+        const total = timings.total_tokens ?? (prompt + predicted);
+        conversations.setTokenCount(conv.id, total);
+        res.write(`data: ${JSON.stringify({ usage: { prompt_tokens: prompt, completion_tokens: predicted, total_tokens: total } })}\n\n`);
       }
     }
   } catch (err) {
