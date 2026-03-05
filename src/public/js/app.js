@@ -5,6 +5,7 @@ const state = {
   abortController: null,
   healthy: false,
   maxContext: 131072,
+  pendingImages: [], // { dataUrl, mimeType, name }
 };
 
 // ── DOM refs ──────────────────────────────────────────
@@ -25,6 +26,11 @@ const contextBar = document.getElementById('context-bar');
 const contextLabel = document.getElementById('context-label');
 const inetDot = document.getElementById('inet-dot');
 const inetLabel = document.getElementById('inet-label');
+const searchDot = document.getElementById('search-dot');
+const searchLabel = document.getElementById('search-label');
+const imageInput = document.getElementById('image-input');
+const attachBtn = document.getElementById('attach-btn');
+const imagePreviewStrip = document.getElementById('image-preview-strip');
 
 // ── API layer ─────────────────────────────────────────
 const api = {
@@ -155,139 +161,24 @@ function showEmptyState() {
   updateContextBar(0);
 }
 
-// ── Code block rendering ─────────────────────────────
-function langToExtension(lang) {
-  const map = {
-    rust: 'rs', python: 'py', javascript: 'js', typescript: 'ts',
-    ruby: 'rb', golang: 'go', go: 'go', csharp: 'cs', cpp: 'cpp',
-    c: 'c', java: 'java', kotlin: 'kt', swift: 'swift', bash: 'sh',
-    shell: 'sh', zsh: 'sh', html: 'html', css: 'css', json: 'json',
-    yaml: 'yaml', yml: 'yaml', toml: 'toml', sql: 'sql', lua: 'lua',
-    perl: 'pl', php: 'php', r: 'r', scala: 'scala', zig: 'zig',
-    elixir: 'ex', erlang: 'erl', haskell: 'hs', ocaml: 'ml',
-    markdown: 'md', xml: 'xml', dockerfile: 'Dockerfile', make: 'Makefile',
-  };
-  return map[lang?.toLowerCase()] || lang || 'txt';
-}
-
-function parseSegments(text) {
-  const segments = [];
-  const re = /^```(\w*)\s*$/gm;
-  let lastIndex = 0;
-  let openMatch = null;
-
-  for (const match of text.matchAll(re)) {
-    if (!openMatch) {
-      // Opening fence
-      if (match.index > lastIndex) {
-        segments.push({ type: 'text', content: text.slice(lastIndex, match.index) });
-      }
-      openMatch = match;
-    } else {
-      // Closing fence
-      const code = text.slice(openMatch.index + openMatch[0].length + 1, match.index);
-      segments.push({ type: 'code', lang: openMatch[1] || '', content: code });
-      openMatch = null;
+// ── Markdown rendering ───────────────────────────────
+marked.setOptions({
+  highlight: (code, lang) => {
+    if (typeof hljs === 'undefined') return code;
+    if (lang && hljs.getLanguage(lang)) {
+      try { return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value; } catch {}
     }
-    lastIndex = match.index + match[0].length + 1;
-  }
-
-  // Unclosed fence = pending
-  if (openMatch) {
-    const code = text.slice(openMatch.index + openMatch[0].length + 1);
-    segments.push({ type: 'code-pending', lang: openMatch[1] || '', content: code });
-  } else if (lastIndex < text.length) {
-    segments.push({ type: 'text', content: text.slice(lastIndex) });
-  }
-
-  return segments;
-}
+    try { return hljs.highlightAuto(code).value; } catch {}
+    return code;
+  },
+  breaks: true,
+  gfm: true,
+});
 
 function renderFormattedContent(text, container) {
-  container.innerHTML = '';
-  const segments = parseSegments(text);
-
-  for (const seg of segments) {
-    if (seg.type === 'text') {
-      const span = document.createElement('span');
-      span.textContent = seg.content;
-      container.appendChild(span);
-    } else {
-      const isPending = seg.type === 'code-pending';
-      const wrapper = document.createElement('div');
-      wrapper.className = 'code-block-wrapper' + (isPending ? ' code-block-pending' : '');
-
-      // Toolbar
-      const toolbar = document.createElement('div');
-      toolbar.className = 'code-block-toolbar';
-
-      const langLabel = document.createElement('span');
-      langLabel.textContent = (seg.lang || 'code') + (isPending ? ' (streaming…)' : '');
-      toolbar.appendChild(langLabel);
-
-      if (!isPending) {
-        const btnGroup = document.createElement('span');
-        btnGroup.className = 'flex gap-1';
-
-        const copyBtn = document.createElement('button');
-        copyBtn.textContent = 'Copy';
-        copyBtn.addEventListener('click', () => {
-          navigator.clipboard.writeText(seg.content).then(() => {
-            copyBtn.textContent = 'Copied!';
-            setTimeout(() => copyBtn.textContent = 'Copy', 1500);
-          });
-        });
-
-        const saveBtn = document.createElement('button');
-        saveBtn.textContent = 'Save';
-        saveBtn.addEventListener('click', () => {
-          const ext = langToExtension(seg.lang);
-          const blob = new Blob([seg.content], { type: 'text/plain' });
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = `code.${ext}`;
-          a.click();
-          URL.revokeObjectURL(a.href);
-        });
-
-        btnGroup.appendChild(copyBtn);
-        btnGroup.appendChild(saveBtn);
-        toolbar.appendChild(btnGroup);
-      }
-
-      wrapper.appendChild(toolbar);
-
-      // Code block
-      const pre = document.createElement('pre');
-      const code = document.createElement('code');
-      if (seg.lang) code.className = `language-${seg.lang}`;
-
-      if (!isPending && typeof hljs !== 'undefined' && seg.lang) {
-        try {
-          const result = hljs.highlight(seg.content, { language: seg.lang, ignoreIllegals: true });
-          code.innerHTML = result.value;
-          code.classList.add('hljs');
-        } catch {
-          code.textContent = seg.content;
-        }
-      } else if (!isPending && typeof hljs !== 'undefined') {
-        try {
-          const result = hljs.highlightAuto(seg.content);
-          code.innerHTML = result.value;
-          code.classList.add('hljs');
-        } catch {
-          code.textContent = seg.content;
-        }
-      } else {
-        code.textContent = seg.content;
-        if (!isPending) code.classList.add('hljs');
-      }
-
-      pre.appendChild(code);
-      wrapper.appendChild(pre);
-      container.appendChild(wrapper);
-    }
-  }
+  const raw = marked.parse(text);
+  container.innerHTML = DOMPurify.sanitize(raw);
+  container.classList.add('markdown-body');
 }
 
 let _renderTimer = null;
@@ -313,11 +204,13 @@ function renderMessages(messages) {
   responseArea.innerHTML = '';
   emptyState.classList.add('hidden');
   for (const msg of messages) {
-    appendMessage(msg.role, msg.content);
+    const text = typeof msg.content === 'object' ? msg.content.text : msg.content;
+    const images = typeof msg.content === 'object' ? msg.content.images : undefined;
+    appendMessage(msg.role, text, images);
   }
 }
 
-function appendMessage(role, text) {
+function appendMessage(role, text, images) {
   emptyState.classList.add('hidden');
   const wrapper = document.createElement('div');
   wrapper.className = 'max-w-4xl mx-auto flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
@@ -328,13 +221,37 @@ function appendMessage(role, text) {
   } else if (role === 'error') {
     bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
   } else {
-    bubble.className = 'max-w-[80%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words';
+    bubble.className = 'max-w-[80%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
+  }
+
+  // Render images in user bubbles
+  if (role === 'user' && images && images.length > 0) {
+    const imgGrid = document.createElement('div');
+    imgGrid.className = 'msg-image-grid mb-2';
+    for (const img of images) {
+      const imgEl = document.createElement('img');
+      imgEl.src = img.dataUrl || `data:${img.mimeType};base64,${img.base64}`;
+      imgEl.className = 'msg-image-thumb';
+      imgEl.addEventListener('click', () => {
+        const overlay = document.createElement('div');
+        overlay.className = 'image-overlay';
+        const full = document.createElement('img');
+        full.src = imgEl.src;
+        full.className = 'image-overlay-img';
+        overlay.appendChild(full);
+        overlay.addEventListener('click', () => overlay.remove());
+        document.body.appendChild(overlay);
+      });
+      imgGrid.appendChild(imgEl);
+    }
+    bubble.appendChild(imgGrid);
   }
 
   if (role === 'assistant' && text) {
     renderFormattedContent(text, bubble);
-  } else {
-    bubble.textContent = text;
+  } else if (text) {
+    const textNode = document.createTextNode(text);
+    bubble.appendChild(textNode);
   }
   wrapper.appendChild(bubble);
   responseArea.appendChild(wrapper);
@@ -343,10 +260,10 @@ function appendMessage(role, text) {
 }
 
 // ── Streaming ─────────────────────────────────────────
-async function sendMessage(content) {
+async function sendMessage(content, images) {
   if (!state.currentConversationId) return;
 
-  appendMessage('user', content);
+  appendMessage('user', content, images);
   const bubble = appendMessage('assistant', '');
   sendBtn.disabled = true;
 
@@ -382,7 +299,10 @@ async function sendMessage(content) {
     const res = await fetch(`/api/conversations/${state.currentConversationId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({
+        content,
+        images: images ? images.map(i => ({ mimeType: i.mimeType, base64: i.base64 })) : undefined,
+      }),
       signal: state.abortController.signal,
     });
 
@@ -494,12 +414,12 @@ async function pollHealth() {
     const { ok, data } = await api.checkHealth();
     state.healthy = ok;
     healthDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
-    healthLabel.textContent = ok ? 'Connected' : 'Disconnected';
+    healthLabel.textContent = ok ? 'llama.cpp' : 'llama.cpp';
     healthLabel.className = ok ? 'text-green-500' : 'text-red-400';
   } catch {
     state.healthy = false;
     healthDot.className = 'inline-block w-2 h-2 rounded-full bg-red-500';
-    healthLabel.textContent = 'Disconnected';
+    healthLabel.textContent = 'llama.cpp';
     healthLabel.className = 'text-red-400';
   }
 }
@@ -516,6 +436,21 @@ async function pollInternet() {
     inetDot.className = 'inline-block w-2 h-2 rounded-full bg-red-500';
     inetLabel.textContent = 'Offline';
     inetLabel.className = 'text-red-400';
+  }
+}
+
+// ── Search engine check ──────────────────────────────
+async function pollSearch() {
+  try {
+    const res = await fetch('/api/health/search');
+    const { ok, engine } = await res.json();
+    searchDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
+    searchLabel.textContent = engine ? `${engine} Search` : 'Tavily Search';
+    searchLabel.className = ok ? 'text-green-500' : 'text-red-400';
+  } catch {
+    searchDot.className = 'inline-block w-2 h-2 rounded-full bg-red-500';
+    searchLabel.textContent = 'Tavily Search';
+    searchLabel.className = 'text-red-400';
   }
 }
 
@@ -632,7 +567,8 @@ newChatBtn.addEventListener('click', async () => {
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const content = input.value.trim();
-  if (!content) return;
+  const images = state.pendingImages.length > 0 ? [...state.pendingImages] : null;
+  if (!content && !images) return;
   if (!state.currentConversationId) {
     const conv = await api.createConversation();
     state.currentConversationId = conv.id;
@@ -642,7 +578,8 @@ form.addEventListener('submit', async (e) => {
   }
   input.value = '';
   input.style.height = 'auto';
-  await sendMessage(content);
+  clearPendingImages();
+  await sendMessage(content, images);
 });
 
 // Auto-resize textarea
@@ -659,6 +596,90 @@ input.addEventListener('keydown', (e) => {
   }
 });
 
+// ── Image handling ────────────────────────────────────
+function addPendingImage(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result;
+    const base64 = dataUrl.split(',')[1];
+    const mimeType = file.type || 'image/png';
+    state.pendingImages.push({ dataUrl, base64, mimeType, name: file.name });
+    renderImagePreviews();
+  };
+  reader.readAsDataURL(file);
+}
+
+function renderImagePreviews() {
+  imagePreviewStrip.innerHTML = '';
+  if (state.pendingImages.length === 0) {
+    imagePreviewStrip.classList.add('hidden');
+    return;
+  }
+  imagePreviewStrip.classList.remove('hidden');
+  state.pendingImages.forEach((img, idx) => {
+    const thumb = document.createElement('div');
+    thumb.className = 'image-preview-thumb';
+    const imgEl = document.createElement('img');
+    imgEl.src = img.dataUrl;
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'image-preview-remove';
+    removeBtn.textContent = '✕';
+    removeBtn.addEventListener('click', () => {
+      state.pendingImages.splice(idx, 1);
+      renderImagePreviews();
+    });
+    thumb.appendChild(imgEl);
+    thumb.appendChild(removeBtn);
+    imagePreviewStrip.appendChild(thumb);
+  });
+}
+
+function clearPendingImages() {
+  state.pendingImages = [];
+  imagePreviewStrip.innerHTML = '';
+  imagePreviewStrip.classList.add('hidden');
+  imageInput.value = '';
+}
+
+attachBtn.addEventListener('click', () => imageInput.click());
+
+imageInput.addEventListener('change', () => {
+  for (const file of imageInput.files) {
+    addPendingImage(file);
+  }
+  imageInput.value = '';
+});
+
+// Paste image from clipboard
+input.addEventListener('paste', (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      addPendingImage(item.getAsFile());
+    }
+  }
+});
+
+// Drag and drop
+form.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  form.classList.add('drag-over');
+});
+form.addEventListener('dragleave', () => {
+  form.classList.remove('drag-over');
+});
+form.addEventListener('drop', (e) => {
+  e.preventDefault();
+  form.classList.remove('drag-over');
+  for (const file of e.dataTransfer.files) {
+    if (file.type.startsWith('image/')) {
+      addPendingImage(file);
+    }
+  }
+});
+
 // ── Init ──────────────────────────────────────────────
 (async function init() {
   await refreshSidebar();
@@ -666,6 +687,8 @@ input.addEventListener('keydown', (e) => {
   setInterval(pollHealth, 5000);
   pollInternet();
   setInterval(pollInternet, 30000);
+  pollSearch();
+  setInterval(pollSearch, 60000);
   refreshSlots();
   setInterval(refreshSlots, 5000);
 })();

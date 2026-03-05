@@ -46,10 +46,16 @@ router.post('/:id/messages', async (req, res) => {
   if (!conv) return res.status(404).json({ error: 'Not found' });
 
   const content = (req.body.content || '').trim();
-  if (!content) return res.status(400).json({ error: 'Content is required' });
+  const images = req.body.images; // [{ mimeType, base64 }]
+  if (!content && (!images || images.length === 0)) {
+    return res.status(400).json({ error: 'Content is required' });
+  }
 
-  // Add user message
-  conversations.addMessage(conv.id, 'user', content);
+  // Store user message — structured content when images are present
+  const storedContent = images && images.length > 0
+    ? { text: content, images }
+    : content;
+  conversations.addMessage(conv.id, 'user', storedContent);
 
   // Resolve slot
   let slotId = slots.getSlotForConversation(conv.id);
@@ -73,9 +79,28 @@ router.post('/:id/messages', async (req, res) => {
   try {
     // Build messages with system prompt for tool support
     const systemPrompt = getSystemPrompt();
+
+    // Convert stored messages to OpenAI format (handle vision content)
+    const historyMessages = conv.messages.slice(0, -1).map(msg => {
+      if (msg.role === 'user' && typeof msg.content === 'object' && msg.content.images) {
+        const parts = [];
+        if (msg.content.text) {
+          parts.push({ type: 'text', text: msg.content.text });
+        }
+        for (const img of msg.content.images) {
+          parts.push({
+            type: 'image_url',
+            image_url: { url: `data:${img.mimeType};base64,${img.base64}` },
+          });
+        }
+        return { role: 'user', content: parts };
+      }
+      return msg;
+    });
+
     const llmMessages = [
       { role: 'system', content: systemPrompt },
-      ...conv.messages.slice(0, -1), // exclude assistant placeholder
+      ...historyMessages,
     ];
 
     const MAX_TOOL_ROUNDS = 5;
@@ -83,16 +108,20 @@ router.post('/:id/messages', async (req, res) => {
     let lastUsage = null;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      console.log(`[tool-loop] round ${round + 1}/${MAX_TOOL_ROUNDS}, messages: ${llmMessages.length}`);
       const result = await collectChatCompletion(llmMessages, {
         slotId,
         signal: abortController.signal,
       });
 
+      console.log(`[tool-loop] LLM response (${result.content.length} chars): ${result.content.slice(0, 200)}`);
       if (result.usage) lastUsage = result.usage;
 
       const toolCall = parseToolCall(result.content);
       if (toolCall) {
+        console.log(`[tool-loop] tool call: ${toolCall.name}(${JSON.stringify(toolCall.arguments)})`);
         const toolResult = await executeTool(toolCall.name, toolCall.arguments);
+        console.log(`[tool-loop] tool result (${toolResult.length} chars): ${toolResult.slice(0, 200)}`);
         // Send tool_use event to client
         res.write(`data: ${JSON.stringify({ tool_use: { name: toolCall.name, result: toolResult } })}\n\n`);
         // Append assistant tool call + tool result to messages for next round
@@ -103,6 +132,22 @@ router.post('/:id/messages', async (req, res) => {
         finalContent = result.content;
         break;
       }
+    }
+
+    // If tool loop exhausted without a final answer, force LLM to respond without tools
+    if (!finalContent) {
+      console.warn(`[tool-loop] no final content after ${MAX_TOOL_ROUNDS} rounds, forcing answer`);
+      llmMessages.push({
+        role: 'user',
+        content: 'You have used all available tool rounds. Now provide your best answer using the information you have gathered so far. Do NOT call any tools.',
+      });
+      const forced = await collectChatCompletion(llmMessages, {
+        slotId,
+        signal: abortController.signal,
+      });
+      console.log(`[tool-loop] forced answer (${forced.content.length} chars): ${forced.content.slice(0, 200)}`);
+      finalContent = forced.content;
+      if (forced.usage) lastUsage = forced.usage;
     }
 
     // Send final content as a single event
@@ -131,10 +176,13 @@ router.post('/:id/messages', async (req, res) => {
   if (updated && updated.title === 'New conversation' && updated.messages.length >= 1) {
     const firstUser = updated.messages.find(m => m.role === 'user');
     if (firstUser) {
-      const title = firstUser.content.length > 60
-        ? firstUser.content.slice(0, 60) + '…'
+      const text = typeof firstUser.content === 'object'
+        ? firstUser.content.text
         : firstUser.content;
-      conversations.updateTitle(conv.id, title);
+      if (text) {
+        const title = text.length > 60 ? text.slice(0, 60) + '…' : text;
+        conversations.updateTitle(conv.id, title);
+      }
     }
   }
 });

@@ -1,6 +1,7 @@
 import { Readability } from '@mozilla/readability';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
+import config from '../config.js';
 
 // Tool registry — single source of truth
 const tools = {
@@ -18,33 +19,29 @@ const tools = {
     },
   },
   web_search: {
-    description: 'Search the web using DuckDuckGo. Requires a "query" argument.',
+    description: 'Search the web using Tavily. Requires a "query" argument.',
     parameters: { query: 'string' },
     execute: async ({ query }) => {
-      // Connection: close prevents keep-alive pooling.
-      // DDG detects repeated requests on persistent connections and triggers CAPTCHA blocks.
-      const res = await fetch('https://lite.duckduckgo.com/lite/', {
+      const res = await fetch('https://api.tavily.com/search', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
-          'Connection': 'close',
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.tavily.apiKey}`,
         },
-        body: new URLSearchParams({ q: query }),
-        signal: AbortSignal.timeout(10000),
+        body: JSON.stringify({ query, max_results: 5 }),
+        signal: AbortSignal.timeout(15000),
       });
-      const html = await res.text();
-      const { document } = parseHTML(html);
-      const links = document.querySelectorAll('a.result-link');
-      const snippets = document.querySelectorAll('.result-snippet');
-      const results = [];
-      for (let i = 0; i < Math.min(links.length, 5); i++) {
-        results.push({
-          title: links[i]?.textContent?.trim(),
-          url: links[i]?.getAttribute('href'),
-          description: snippets[i]?.textContent?.trim() || '',
-        });
+      if (!res.ok) {
+        const body = await res.text();
+        console.warn(`[web_search] Tavily returned ${res.status}: ${body}`);
+        return { error: `Search failed (HTTP ${res.status})`, results: [] };
       }
+      const data = await res.json();
+      const results = (data.results || []).map(r => ({
+        title: r.title,
+        url: r.url,
+        description: r.content || '',
+      }));
       return { results };
     },
   },
@@ -97,7 +94,11 @@ export function getSystemPrompt() {
     .map(([name, t]) => `- ${name}: ${t.description}`)
     .join('\n');
 
-  return `You have access to tools. To use a tool, respond ONLY with:
+  const today = new Date().toISOString().split('T')[0];
+
+  return `You are a helpful, knowledgeable assistant. Today's date is ${today}. Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
+
+To use a tool, respond ONLY with:
 
 <tool_call>
 {"name": "tool_name", "arguments": {}}
@@ -106,10 +107,29 @@ export function getSystemPrompt() {
 Available tools:
 ${toolList}
 
-Rules:
+Tool rules:
 - Output ONLY the <tool_call> block when using a tool, no other text.
 - Wait for the tool result before answering.
-- Do not fabricate tool results.`;
+- Do not fabricate tool results.
+
+## Response Formatting
+
+Adapt formatting to response length:
+- **Under 50 words**: Plain text, no special formatting needed.
+- **50–150 words**: Use **bold** for key terms. Keep to 1–2 short paragraphs.
+- **150–300 words**: Use ## headers to break into sections. Use bullet points where appropriate.
+- **Over 300 words**: Begin with a **Key Takeaway** block (2–3 bullets). Use headers, lists, and tables.
+
+Rules:
+- Answer the question in the first sentence. Never bury the conclusion.
+- Use **bold** for key terms only — never bold entire sentences.
+- Use bullet points for 3+ related items. Use numbered lists only for sequential steps.
+- Use tables for comparisons of 3+ items.
+- Use fenced code blocks with language tags for code. Use \`inline code\` for technical terms.
+- Keep paragraphs to 2–4 sentences.
+- Use emoji sparingly as section markers (e.g., 📌 Key Point, ⚠️ Warning) — never inline or decorative.
+- Use plain, direct language. No filler phrases or sycophantic openers.
+- Separate major topic shifts with a horizontal rule (---).`;
 }
 
 // Parse <tool_call>...</tool_call> from LLM output

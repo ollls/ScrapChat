@@ -42,6 +42,8 @@ src/
 | `/api/slots/pin` | POST | Pin conversation to slot |
 | `/api/slots/unpin` | POST | Unpin conversation from slot |
 | `/api/health` | GET | llama-server health proxy |
+| `/api/health/internet` | GET | Internet connectivity check |
+| `/api/health/search` | GET | Tavily search API availability check |
 
 ## Commands
 - `npm run dev` — start dev server with --watch
@@ -53,18 +55,22 @@ src/
 - `PORT` — server port (default: 3000)
 - `LLAMA_URL` — llama-server base URL (default: `http://localhost:8080`)
 - `LLAMA_MAX_CONTEXT` — fallback max context tokens (default: 131072, overridden by slot `n_ctx`)
+- `TAVILY_API_KEY` — Tavily search API key
 
 ## Current State
 - Connected to local llama-server via OpenAI-compatible chat completions endpoint
 - Prompt-based tool calling: system prompt defines `<tool_call>` protocol, backend loops up to 5 rounds executing tools and feeding results back until LLM produces a final answer
 - Tool-call rounds are buffered (non-streaming); final answer sent as single SSE `{content}` event
 - Client shows collapsible tool-use indicators (`{tool_use}` SSE events) in assistant bubbles
-- Available tools: `current_datetime` (returns UTC, local time, IANA timezone, UTC offset), `web_search` (DuckDuckGo search, returns top 5 results), `web_fetch` (fetches a URL and extracts content as markdown via Readability + Turndown)
+- Available tools: `current_datetime` (returns UTC, local time, IANA timezone, UTC offset), `web_search` (Tavily search, returns top 5 results), `web_fetch` (fetches a URL and extracts content as markdown via Readability + Turndown)
+- System prompt includes current date to prevent stale answers from training data
+- Vision/image support: users can attach images via button, clipboard paste, or drag-and-drop; images sent to llama-server as base64 in OpenAI `image_url` format
 - SSE streaming with support for reasoning models (Qwen3 `reasoning_content`)
 - In-memory conversation store (no persistence across restarts)
 - Slot monitoring with bidirectional conversation-slot mapping
 - Context bar reads actual `n_ctx` from llama-server `/slots` endpoint
-- Health polling (5s) and slot polling (3s)
+- Status bar indicators: llama.cpp (server health), Internet (connectivity), Tavily Search (search API availability)
+- Health polling (5s), slot polling (5s), internet check (30s), search engine check (60s)
 - Auto-creates conversation on first message if none selected
 
 ## Conventions
