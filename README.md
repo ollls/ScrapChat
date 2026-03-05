@@ -31,6 +31,10 @@ cd ScrapChat
 # Install dependencies
 npm install
 
+# Configure
+cp .env.example .env
+# Edit .env with your settings (LLAMA_URL, TAVILY_API_KEY, etc.)
+
 # Build CSS
 npm run build
 
@@ -42,7 +46,13 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ## Configuration
 
-All configuration is via environment variables, passed inline when starting the server:
+Copy the example config and edit it:
+
+```bash
+cp .env.example .env
+```
+
+All configuration is via environment variables in the `.env` file:
 
 | Variable | Default | Description |
 |---|---|---|
