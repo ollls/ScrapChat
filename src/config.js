@@ -5,6 +5,6 @@ export default {
     maxContextTokens: parseInt(process.env.LLAMA_MAX_CONTEXT || '131072', 10),
   },
   tavily: {
-    apiKey: process.env.TAVILY_API_KEY || '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',
+    apiKey: process.env.TAVILY_API_KEY || '',
   },
 };
