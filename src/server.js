@@ -5,6 +5,7 @@ import config from './config.js';
 import conversationRoutes from './routes/conversations.js';
 import slotRoutes from './routes/slots.js';
 import healthRoutes from './routes/health.js';
+import etradeRoutes from './routes/etrade.js';
 import slots from './services/slots.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -15,10 +16,12 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(join(__dirname, 'public')));
+app.use('/files', express.static(join(__dirname, '..', 'data')));
 
 app.use('/api/conversations', conversationRoutes);
 app.use('/api/slots', slotRoutes);
 app.use('/api/health', healthRoutes);
+app.use('/api/etrade', etradeRoutes);
 
 app.get('/', (_req, res) => {
   res.sendFile(join(__dirname, 'views', 'index.html'));

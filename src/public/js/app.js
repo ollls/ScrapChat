@@ -33,6 +33,11 @@ const searchDropdown = document.getElementById('search-dropdown');
 const toolUsageToggle = document.getElementById('tool-usage-toggle');
 const toolUsageCount = document.getElementById('tool-usage-count');
 const toolUsageDropdown = document.getElementById('tool-usage-dropdown');
+const etradeStatus = document.getElementById('etrade-status');
+const etradeDot = document.getElementById('etrade-dot');
+const etradeToggle = document.getElementById('etrade-toggle');
+const etradePanel = document.getElementById('etrade-panel');
+const etradePanelContent = document.getElementById('etrade-panel-content');
 const imageInput = document.getElementById('image-input');
 const attachBtn = document.getElementById('attach-btn');
 const imagePreviewStrip = document.getElementById('image-preview-strip');
@@ -169,6 +174,7 @@ function showEmptyState() {
 // ── Markdown rendering ───────────────────────────────
 marked.setOptions({
   highlight: (code, lang) => {
+    if (lang === 'mermaid') return code; // don't highlight mermaid, render later
     if (typeof hljs === 'undefined') return code;
     if (lang && hljs.getLanguage(lang)) {
       try { return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value; } catch {}
@@ -180,10 +186,44 @@ marked.setOptions({
   gfm: true,
 });
 
-function renderFormattedContent(text, container) {
+// Initialize Mermaid with dark theme
+if (typeof mermaid !== 'undefined') {
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#18181b',
+      primaryColor: '#6366f1',
+      primaryTextColor: '#e4e4e7',
+      lineColor: '#71717a',
+    },
+  });
+}
+
+let _mermaidId = 0;
+
+function renderFormattedContent(text, container, { renderMermaid = false } = {}) {
   const raw = marked.parse(text);
   container.innerHTML = DOMPurify.sanitize(raw);
   container.classList.add('markdown-body');
+
+  if (renderMermaid && typeof mermaid !== 'undefined') {
+    container.querySelectorAll('code.language-mermaid').forEach(async (codeEl) => {
+      const pre = codeEl.parentElement;
+      const source = codeEl.textContent;
+      const id = `mermaid-${++_mermaidId}`;
+      try {
+        const { svg } = await mermaid.render(id, source);
+        const div = document.createElement('div');
+        div.className = 'mermaid-chart';
+        div.innerHTML = svg;
+        pre.replaceWith(div);
+      } catch {
+        // leave as code block if mermaid fails to parse
+      }
+    });
+  }
 }
 
 let _renderTimer = null;
@@ -202,6 +242,23 @@ function scheduleRender(text, container) {
     _lastRenderTime = Date.now();
     renderFormattedContent(text, container);
   }, RENDER_INTERVAL - (now - _lastRenderTime));
+}
+
+// ── File download link helper ─────────────────────────
+function makeFileDownloadLink(toolName, resultStr) {
+  try {
+    const parsed = JSON.parse(resultStr);
+    // Direct save_file result or nested savedFile from other tools (e.g. etrade_account)
+    const fileInfo = toolName === 'save_file' ? parsed : parsed.savedFile;
+    if (!fileInfo?.url || !fileInfo?.filename) return null;
+    const sizeStr = fileInfo.size >= 1024 ? `${(fileInfo.size / 1024).toFixed(1)} KB` : `${fileInfo.size} bytes`;
+    const link = document.createElement('a');
+    link.href = fileInfo.url;
+    link.download = fileInfo.filename;
+    link.className = 'inline-flex items-center gap-1 mt-1 px-2 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded transition-colors';
+    link.innerHTML = `<span>📥</span> Download <strong>${fileInfo.filename}</strong> <span class="text-zinc-400">(${sizeStr})</span>`;
+    return link;
+  } catch { return null; }
 }
 
 // ── Messages ──────────────────────────────────────────
@@ -292,13 +349,15 @@ function appendMessage(role, text, images, meta = {}) {
       detail.appendChild(summary);
       detail.appendChild(body);
       container.appendChild(detail);
+      const dl = makeFileDownloadLink(tu.name, tu.result);
+      if (dl) container.appendChild(dl);
     }
     bubble.appendChild(container);
   }
 
   if (role === 'assistant' && text) {
     const contentSpan = document.createElement('span');
-    renderFormattedContent(text, contentSpan);
+    renderFormattedContent(text, contentSpan, { renderMermaid: true });
     bubble.appendChild(contentSpan);
   } else if (text) {
     const textNode = document.createTextNode(text);
@@ -413,6 +472,8 @@ async function sendMessage(content, images) {
               detail.appendChild(summary);
               detail.appendChild(body);
               toolUseContainer.appendChild(detail);
+              const dl = makeFileDownloadLink(data.tool_use.name, data.tool_use.result);
+              if (dl) toolUseContainer.appendChild(dl);
               responseArea.scrollTop = responseArea.scrollHeight;
             }
             if (data.content) {
@@ -440,7 +501,7 @@ async function sendMessage(content, images) {
     }
   } finally {
     clearTimeout(_renderTimer);
-    if (accumulated) renderFormattedContent(accumulated, contentSpan);
+    if (accumulated) renderFormattedContent(accumulated, contentSpan, { renderMermaid: true });
     state.abortController = null;
     sendBtn.disabled = false;
     input.focus();
@@ -562,6 +623,7 @@ searchToggle.addEventListener('click', (e) => {
 document.addEventListener('click', () => {
   searchDropdown.classList.add('hidden');
   toolUsageDropdown.classList.add('hidden');
+  etradePanel.classList.add('hidden');
 });
 
 searchDropdown.addEventListener('click', (e) => e.stopPropagation());
@@ -595,6 +657,111 @@ toolUsageToggle.addEventListener('click', (e) => {
 });
 
 toolUsageDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+// ── E*TRADE auth flow ────────────────────────────────
+async function pollEtrade() {
+  try {
+    const res = await fetch('/api/etrade/status');
+    const { authenticated, configured } = await res.json();
+    if (!configured) return; // no keys, hide entirely
+    etradeStatus.classList.remove('hidden');
+    if (authenticated) {
+      etradeDot.className = 'inline-block w-2 h-2 rounded-full bg-green-500 pulse-dot';
+      etradeToggle.className = 'text-green-500';
+      etradeToggle.textContent = 'E*TRADE';
+    } else {
+      etradeDot.className = 'inline-block w-2 h-2 rounded-full bg-amber-500';
+      etradeToggle.className = 'text-amber-500 hover:text-amber-400 transition-colors';
+      etradeToggle.textContent = 'E*TRADE (connect)';
+    }
+  } catch {}
+}
+
+function renderEtradePanel(authenticated) {
+  if (authenticated) {
+    etradePanelContent.innerHTML = `
+      <div class="text-xs text-green-400 mb-1">Connected</div>
+      <div class="text-xs text-zinc-500 mb-2">Ask the assistant about your accounts, balances, portfolio, or transactions.</div>
+      <button id="etrade-disconnect-btn" class="w-full bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-xs font-medium px-3 py-1.5 rounded transition-colors">
+        Disconnect &amp; Reconnect
+      </button>`;
+    document.getElementById('etrade-disconnect-btn').addEventListener('click', async () => {
+      await fetch('/api/etrade/disconnect', { method: 'POST' });
+      pollEtrade();
+      renderEtradePanel(false);
+    });
+    return;
+  }
+  etradePanelContent.innerHTML = `
+    <div id="etrade-step-1">
+      <div class="text-xs text-zinc-400 mb-2">Connect your E*TRADE account (read-only)</div>
+      <button id="etrade-auth-btn" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">
+        Open E*TRADE Authorization
+      </button>
+    </div>
+    <div id="etrade-step-2" class="hidden mt-2">
+      <div class="text-xs text-zinc-400 mb-2">Paste the verifier code from E*TRADE:</div>
+      <div class="flex gap-2">
+        <input id="etrade-verifier" type="text" placeholder="Verifier code"
+          class="flex-1 bg-zinc-900 text-zinc-100 text-xs px-2 py-1.5 rounded border border-zinc-600 outline-none focus:border-zinc-400">
+        <button id="etrade-submit-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">
+          Connect
+        </button>
+      </div>
+      <div id="etrade-error" class="text-red-400 text-xs mt-1 hidden"></div>
+    </div>`;
+
+  document.getElementById('etrade-auth-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('etrade-auth-btn');
+    btn.textContent = 'Opening…';
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/etrade/auth');
+      const { url, error } = await res.json();
+      if (error) throw new Error(error);
+      window.open(url, '_blank');
+      document.getElementById('etrade-step-2').classList.remove('hidden');
+      btn.textContent = 'Opened — paste code below';
+    } catch (err) {
+      btn.textContent = 'Failed — try again';
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('etrade-submit-btn').addEventListener('click', async () => {
+    const verifier = document.getElementById('etrade-verifier').value.trim();
+    const errEl = document.getElementById('etrade-error');
+    if (!verifier) return;
+    errEl.classList.add('hidden');
+    try {
+      const res = await fetch('/api/etrade/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verifier }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      etradePanel.classList.add('hidden');
+      await pollEtrade();
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.classList.remove('hidden');
+    }
+  });
+}
+
+etradeToggle.addEventListener('click', async (e) => {
+  e.stopPropagation();
+  const isOpen = !etradePanel.classList.contains('hidden');
+  etradePanel.classList.toggle('hidden');
+  if (!isOpen) {
+    const res = await fetch('/api/etrade/status');
+    const { authenticated } = await res.json();
+    renderEtradePanel(authenticated);
+  }
+});
+
+etradePanel.addEventListener('click', (e) => e.stopPropagation());
 
 // ── Slot panel ────────────────────────────────────────
 let slotPanelOpen = false;
@@ -831,6 +998,7 @@ form.addEventListener('drop', (e) => {
   setInterval(pollInternet, 30000);
   pollSearch();
   setInterval(pollSearch, 60000);
+  pollEtrade();
   refreshSlots();
   setInterval(refreshSlots, 5000);
 })();

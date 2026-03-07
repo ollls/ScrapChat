@@ -29,24 +29,29 @@ const ENGINES = {
   both: { label: 'Both', configured: () => !!config.keiro.apiKey && !!config.tavily.apiKey },
 };
 
-function pingEngine(engine) {
+// Zero-credit health check: send empty/missing query, check that key is accepted.
+// Valid key → 422 (Tavily) or 400 (Keiro); invalid key → 401/403.
+async function pingEngine(engine) {
+  let resp;
   if (engine === 'tavily') {
-    return fetch('https://api.tavily.com/search', {
+    resp = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${config.tavily.apiKey}`,
       },
-      body: JSON.stringify({ query: 'ping', max_results: 1 }),
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(5000),
+    });
+  } else {
+    resp = await fetch(`${config.keiro.baseUrl}/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: config.keiro.apiKey }),
       signal: AbortSignal.timeout(5000),
     });
   }
-  return fetch(`${config.keiro.baseUrl}/search`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apiKey: config.keiro.apiKey, query: 'ping' }),
-    signal: AbortSignal.timeout(5000),
-  });
+  return resp.status !== 401 && resp.status !== 403;
 }
 
 router.get('/search', async (_req, res) => {
@@ -59,13 +64,12 @@ router.get('/search', async (_req, res) => {
     let ok;
     if (engine === 'both') {
       const [keiro, tavily] = await Promise.all([
-        pingEngine('keiro').then(r => r.ok).catch(() => false),
-        pingEngine('tavily').then(r => r.ok).catch(() => false),
+        pingEngine('keiro').catch(() => false),
+        pingEngine('tavily').catch(() => false),
       ]);
-      ok = keiro || tavily; // green if at least one works
+      ok = keiro || tavily;
     } else {
-      const resp = await pingEngine(engine);
-      ok = resp.ok;
+      ok = await pingEngine(engine);
     }
     res.json({ ok, engine: label, engines });
   } catch {
