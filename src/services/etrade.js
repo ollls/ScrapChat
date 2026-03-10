@@ -279,25 +279,39 @@ async function getTransactionDetail(accountIdKey, transactionId) {
   return data.TransactionDetailsResponse || data;
 }
 
-async function getTransactions(accountIdKey, { count = 50, startDate, endDate } = {}) {
+async function getTransactions(accountIdKey, { count = 50, startDate, endDate, maxPages = 0 } = {}) {
   accountIdKey = resolveAccountIdKey(accountIdKey) || accountIdKey;
-  // Default to last 30 days if no start date provided
   if (!startDate) {
     const d = new Date();
     d.setDate(d.getDate() - 30);
     startDate = `${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}${d.getFullYear()}`;
   }
-  let url = `/v1/accounts/${accountIdKey}/transactions.json?count=${count}`;
   const sd = normalizeDate(startDate);
   const ed = normalizeDate(endDate);
-  if (sd) url += `&startDate=${sd}`;
-  if (ed) url += `&endDate=${ed}`;
+  let allTransactions = [];
+  let marker = undefined;
   try {
-    const data = await apiGet(url, 180000);
-    const result = data.TransactionListResponse || data;
-    const txns = result?.Transaction || result?.transaction || [];
-    result.totalCount = Array.isArray(txns) ? txns.length : 0;
-    return result;
+    for (let page = 0; maxPages === 0 || page < maxPages; page++) {
+      let url = `/v1/accounts/${accountIdKey}/transactions.json?count=${count}`;
+      if (sd) url += `&startDate=${sd}`;
+      if (ed) url += `&endDate=${ed}`;
+      if (marker) url += `&marker=${marker}`;
+      const data = await apiGet(url, 180000);
+      const result = data.TransactionListResponse || data;
+      const txns = result?.Transaction || result?.transaction || [];
+      if (Array.isArray(txns)) allTransactions = allTransactions.concat(txns);
+      if (!result.moreTransactions) break;
+      marker = result.marker;
+      if (!marker) break;
+    }
+    return {
+      Transaction: allTransactions,
+      totalCount: allTransactions.length,
+      moreTransactions: false,
+      pagesFetched: Math.ceil(allTransactions.length / count) || 1,
+      queryStartDate: sd || 'not specified',
+      queryEndDate: ed || 'today',
+    };
   } catch (err) {
     console.error(`[etrade] transactions error:`, err.message);
     throw err;

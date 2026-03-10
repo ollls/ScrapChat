@@ -112,7 +112,8 @@ function transactionsToMd(data) {
     const expiry = p.expiryYear ? `20${String(p.expiryYear).padStart(2, '0')}-${String(p.expiryMonth).padStart(2, '0')}-${String(p.expiryDay).padStart(2, '0')}` : '';
     return [date, t.transactionType, p.symbol || '', p.callPut || '', p.strikePrice ?? '', expiry, b.quantity ?? '', b.price ?? '', t.amount ?? '', b.fee ?? ''];
   });
-  return toMd(`Transactions (${txns.length})`, headers, rows);
+  const range = `${data.queryStartDate || '?'} to ${data.queryEndDate || 'today'}`;
+  return toMd(`Transactions (${txns.length}) — queried ${range}`, headers, rows);
 }
 
 function portfolioToMd(data) {
@@ -471,10 +472,39 @@ const tools = {
       return await saveToFile(filename, content);
     },
   },
+  run_command: {
+    description: 'Run a shell command on the server. Requires user approval before execution. Requires a "command" argument (the shell command to run). Use for tasks like listing files, checking system info, installing packages, or any shell operation the user requests.',
+    parameters: { command: 'string' },
+    execute: async ({ command }, context) => {
+      if (!command?.trim()) return { error: 'command is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      const approved = await context.confirmFn(command);
+      if (!approved) return { denied: true, message: 'User denied command execution.' };
+
+      const { execSync } = await import('child_process');
+      try {
+        const stdout = execSync(command, {
+          encoding: 'utf-8',
+          timeout: 30000,
+          maxBuffer: 1024 * 1024,
+          cwd: process.env.HOME,
+        });
+        return { command, exitCode: 0, stdout: stdout.slice(0, 8000) };
+      } catch (err) {
+        return {
+          command,
+          exitCode: err.status ?? 1,
+          stdout: (err.stdout || '').slice(0, 4000),
+          stderr: (err.stderr || '').slice(0, 4000),
+        };
+      }
+    },
+  },
   etrade_account: {
-    description: 'Retrieve E*TRADE brokerage and market data. Requires an "action" argument.\n\n**Account actions** (require "accountIdKey" — encoded string key from "list" action, NOT numeric accountId):\n- "list": list accounts\n- "balance": account balance\n- "portfolio": positions/holdings\n- "transactions": transaction history (defaults last 30 days; optional startDate/endDate in MMDDYYYY, count max 50)\n- "gains": unrealized gains with lot-level cost basis and short/long term\n- "orders": order history (optional status: OPEN/EXECUTED/CANCELLED/etc, fromDate/toDate in MMDDYYYY, count max 100)\n- "transaction_detail": single transaction detail (requires transactionId)\n\n**Market data actions** (no accountIdKey needed):\n- "quote": real-time quotes (requires "symbols" — comma-separated, up to 25; optional detailFlag: ALL/FUNDAMENTAL/INTRADAY/OPTIONS/WEEK_52)\n- "optionchains": option chains with full Greeks (Delta, Gamma, Theta, Vega, Rho, IV) and bid/ask/volume/OI (requires "symbol"; optional expiryYear/expiryMonth/expiryDay, strikePriceNear, noOfStrikes, chainType: CALL/PUT/CALLPUT, includeWeekly)\n- "optionexpiry": option expiration dates (requires "symbol")\n- "lookup": product/symbol lookup (requires "search" — company name or partial symbol)\n\n**User alerts:**\n- "alerts": account/stock alerts (optional count 1-300, category: STOCK/ACCOUNT, status: READ/UNREAD)\n- "alert_detail": single alert detail (requires alertId)\n\nTo export data, add "saveAs" with a filename (.csv/.md/.json). Usage guide: "gains" for open positions with cost basis; "transactions" for trade history; "orders" for order status/fills; "quote" for current prices; "optionchains" for available options with Greeks (Delta, Theta, IV, etc.).',
-    parameters: { action: 'string', accountIdKey: 'string (optional)', startDate: 'string (optional)', endDate: 'string (optional)', count: 'number (optional)', saveAs: 'string (optional)', symbols: 'string (optional)', symbol: 'string (optional)', detailFlag: 'string (optional)', expiryYear: 'string (optional)', expiryMonth: 'string (optional)', expiryDay: 'string (optional)', strikePriceNear: 'string (optional)', noOfStrikes: 'string (optional)', chainType: 'string (optional)', includeWeekly: 'boolean (optional)', search: 'string (optional)', status: 'string (optional)', fromDate: 'string (optional)', toDate: 'string (optional)', category: 'string (optional)', transactionId: 'string (optional)', alertId: 'string (optional)' },
-    execute: async ({ action, accountIdKey, startDate, endDate, count, saveAs, symbols, symbol, detailFlag, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly, search, status, fromDate, toDate, category, transactionId, alertId }) => {
+    description: 'Retrieve E*TRADE brokerage and market data. Requires an "action" argument.\n\n**Account actions** (require "accountIdKey" — encoded string key from "list" action, NOT numeric accountId):\n- "list": list accounts\n- "balance": account balance\n- "portfolio": positions/holdings\n- "transactions": transaction history (auto-paginates to fetch ALL matching transactions within the date range; **defaults to last 30 days only** — always tell the user what date range was queried so they know older transactions exist; use startDate/endDate in MMDDYYYY to query other periods; maxPages to limit pagination — 0=unlimited which is the default)\n- "gains": unrealized gains with lot-level cost basis and short/long term\n- "orders": order history (optional status: OPEN/EXECUTED/CANCELLED/etc, fromDate/toDate in MMDDYYYY, count max 100)\n- "transaction_detail": single transaction detail (requires transactionId)\n\n**Market data actions** (no accountIdKey needed):\n- "quote": real-time quotes (requires "symbols" — comma-separated, up to 25; optional detailFlag: ALL/FUNDAMENTAL/INTRADAY/OPTIONS/WEEK_52)\n- "optionchains": option chains with full Greeks (Delta, Gamma, Theta, Vega, Rho, IV) and bid/ask/volume/OI (requires "symbol"; optional expiryYear/expiryMonth/expiryDay, strikePriceNear, noOfStrikes, chainType: CALL/PUT/CALLPUT, includeWeekly)\n- "optionexpiry": option expiration dates (requires "symbol")\n- "lookup": product/symbol lookup (requires "search" — company name or partial symbol)\n\n**User alerts:**\n- "alerts": account/stock alerts (optional count 1-300, category: STOCK/ACCOUNT, status: READ/UNREAD)\n- "alert_detail": single alert detail (requires alertId)\n\nTo export data, add "saveAs" with a filename (.csv/.md/.json). Usage guide: "gains" for open positions with cost basis; "transactions" for trade history; "orders" for order status/fills; "quote" for current prices; "optionchains" for available options with Greeks (Delta, Theta, IV, etc.).',
+    parameters: { action: 'string', accountIdKey: 'string (optional)', startDate: 'string (optional)', endDate: 'string (optional)', count: 'number (optional)', maxPages: 'number (optional, transactions only — 0=unlimited, default 0)', saveAs: 'string (optional)', symbols: 'string (optional)', symbol: 'string (optional)', detailFlag: 'string (optional)', expiryYear: 'string (optional)', expiryMonth: 'string (optional)', expiryDay: 'string (optional)', strikePriceNear: 'string (optional)', noOfStrikes: 'string (optional)', chainType: 'string (optional)', includeWeekly: 'boolean (optional)', search: 'string (optional)', status: 'string (optional)', fromDate: 'string (optional)', toDate: 'string (optional)', category: 'string (optional)', transactionId: 'string (optional)', alertId: 'string (optional)' },
+    execute: async ({ action, accountIdKey, startDate, endDate, count, maxPages, saveAs, symbols, symbol, detailFlag, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly, search, status, fromDate, toDate, category, transactionId, alertId }) => {
       if (!etrade.isAuthenticated()) {
         return { error: 'E*TRADE not authenticated. Click "E*TRADE (connect)" in the status bar to authenticate.' };
       }
@@ -493,7 +523,7 @@ const tools = {
           break;
         case 'transactions':
           if (!accountIdKey) return { error: 'accountIdKey required. Use action "list" first.' };
-          result = await etrade.getTransactions(accountIdKey, { count, startDate, endDate });
+          result = await etrade.getTransactions(accountIdKey, { count, startDate, endDate, maxPages });
           break;
         case 'gains':
           if (!accountIdKey) return { error: 'accountIdKey required. Use action "list" first.' };
@@ -576,6 +606,23 @@ const tools = {
   },
 };
 
+// ── Command confirmation ────────────────────────────
+const pendingConfirmations = new Map(); // conversationId → { resolve, command }
+
+export function requestConfirmation(conversationId, command) {
+  return new Promise((resolve) => {
+    pendingConfirmations.set(conversationId, { resolve, command });
+  });
+}
+
+export function resolveConfirmation(conversationId, approved) {
+  const pending = pendingConfirmations.get(conversationId);
+  if (!pending) return false;
+  pendingConfirmations.delete(conversationId);
+  pending.resolve(approved);
+  return true;
+}
+
 // Tool enable/disable state
 const disabledTools = new Set();
 
@@ -641,6 +688,7 @@ ${toolList}
 Tool rules:
 - Output ONLY <tool_call> blocks when using tools, no other text.
 - Wait for the tool result before answering.
+- You are a LOCAL assistant running on the user's machine. You have real shell access via the run_command tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use run_command. NEVER say you cannot run commands or don't have access to the user's system.
 - Do not fabricate tool results. When etrade_account returns a "_markdown" field, use that pre-formatted table as your primary data source — present those exact values. Do not recompute, round, or omit rows.
 - After web_search, ALWAYS use web_fetch on the most relevant result URL to get full details before answering. Search snippets alone are not sufficient.
 - For ANY question about stock quotes, option chains, option Greeks, option expiration dates, or symbol lookup — ALWAYS use etrade_account (actions: quote, optionchains, optionexpiry, lookup) instead of web_search. These return real-time market data directly from E*TRADE. Only fall back to web_search if E*TRADE is not authenticated.
@@ -662,7 +710,7 @@ Rules:
 - Use bullet points for 3+ related items. Use numbered lists only for sequential steps.
 - Use tables for comparisons of 3+ items.
 - Use fenced code blocks with language tags for code. Use \`inline code\` for technical terms.
-- Mermaid v11 diagrams are supported by the UI (NOT a tool — just use fenced \`\`\`mermaid code blocks in your response). No emoji in Mermaid text. Pie chart labels MUST be quoted: \`"AMD" : 35.06\` (not \`AMD : 35.06\`). Pie values must be positive — use a table for negative values. For ANY bar or line chart, the FIRST LINE must be exactly "xychart-beta" — no other chart type keyword exists (not "barChart", "lineChart", "line chart", "bar chart"). Use "bar" and "line" as series keywords inside xychart-beta. Valid types: pie, xychart-beta, flowchart, timeline, mindmap, gantt, journey, sequenceDiagram.
+- Mermaid v11 diagrams are supported by the UI (NOT a tool — just use fenced \`\`\`mermaid code blocks in your response). No emoji in Mermaid text. Pie chart labels MUST be quoted: \`"AMD" : 35.06\` (not \`AMD : 35.06\`). Pie values must be positive — if ANY value is negative, use xychart-beta bar chart instead. For ANY bar or line chart, the FIRST LINE must be exactly "xychart-beta" — no other chart type keyword exists (not "barChart", "lineChart", "line chart", "bar chart"). Use "bar" and "line" as series keywords inside xychart-beta. Valid types: pie, xychart-beta, flowchart, timeline, mindmap, gantt, journey, sequenceDiagram.
 - Keep paragraphs to 2–4 sentences.
 - Use emoji sparingly as section markers (e.g., 📌 Key Point, ⚠️ Warning) — never inline or decorative.
 - Use plain, direct language. No filler phrases or sycophantic openers.
@@ -710,7 +758,7 @@ export function parseToolCalls(text) {
 }
 
 // Execute a tool by name
-export async function executeTool(name, args) {
+export async function executeTool(name, args, context) {
   if (disabledTools.has(name)) {
     return JSON.stringify({ error: `Tool "${name}" is currently disabled.` });
   }
@@ -728,7 +776,7 @@ export async function executeTool(name, args) {
     }
   }
   try {
-    const result = await tool.execute(args);
+    const result = await tool.execute(args, context);
     return JSON.stringify(result);
   } catch (err) {
     return JSON.stringify({ error: err.message });

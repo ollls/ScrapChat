@@ -2,7 +2,7 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks } from '../services/llm.js';
-import { getSystemPrompt, parseToolCalls, executeTool } from '../services/tools.js';
+import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation } from '../services/tools.js';
 
 const router = Router();
 
@@ -38,6 +38,14 @@ router.patch('/:id', (req, res) => {
   const conv = conversations.updateTitle(req.params.id, req.body.title);
   if (!conv) return res.status(404).json({ error: 'Not found' });
   res.json(conv);
+});
+
+// Confirm/deny a pending command
+router.post('/:id/confirm', (req, res) => {
+  const { approved } = req.body;
+  const resolved = resolveConfirmation(req.params.id, !!approved);
+  if (!resolved) return res.status(404).json({ error: 'No pending confirmation' });
+  res.json({ ok: true });
 });
 
 // Send message + stream response
@@ -151,8 +159,14 @@ router.post('/:id/messages', async (req, res) => {
       const toolCallsFound = parseToolCalls(result.content);
       if (toolCallsFound.length > 0) {
         // Execute all tool calls in parallel
+        const context = {
+          confirmFn: (command) => {
+            res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
+            return requestConfirmation(conv.id, command);
+          },
+        };
         const results = await Promise.all(
-          toolCallsFound.map(tc => executeTool(tc.name, tc.arguments))
+          toolCallsFound.map(tc => executeTool(tc.name, tc.arguments, context))
         );
         const resultParts = [];
         for (let i = 0; i < toolCallsFound.length; i++) {

@@ -219,7 +219,19 @@ function renderFormattedContent(text, container, { renderMermaid = false } = {})
   if (renderMermaid && typeof mermaid !== 'undefined') {
     container.querySelectorAll('code.language-mermaid').forEach(async (codeEl) => {
       const pre = codeEl.parentElement;
-      const source = codeEl.textContent;
+      let source = codeEl.textContent;
+      // Auto-convert pie charts with negative values to xychart-beta bar charts
+      if (/^\s*pie\b/i.test(source)) {
+        const entries = [...source.matchAll(/"([^"]+)"\s*:\s*([-\d.]+)/g)];
+        if (entries.some(m => parseFloat(m[2]) < 0)) {
+          const labels = entries.map(m => `"${m[1]}"`).join(', ');
+          const values = entries.map(m => m[2]).join(', ');
+          const titleMatch = source.match(/title\s+(.+)/i);
+          const title = titleMatch ? titleMatch[1].trim() : 'Chart';
+          source = `xychart-beta\n    title "${title}"\n    x-axis [${labels}]\n    bar [${values}]`;
+          codeEl.textContent = source;
+        }
+      }
       const id = `mermaid-${++_mermaidId}`;
       try {
         const { svg } = await mermaid.render(id, source);
@@ -483,6 +495,42 @@ async function sendMessage(content, images) {
               const dl = makeFileDownloadLink(data.tool_use.name, data.tool_use.result);
               if (dl) toolUseContainer.appendChild(dl);
               responseArea.scrollTop = responseArea.scrollHeight;
+            }
+            if (data.confirm_command) {
+              if (!hasToolUse) {
+                hasToolUse = true;
+                bubble.insertBefore(toolUseContainer, contentSpan);
+              }
+              const confirmDiv = document.createElement('div');
+              confirmDiv.className = 'my-2 p-3 bg-zinc-900 border border-zinc-700 rounded-lg text-xs';
+              confirmDiv.innerHTML = `
+                <div class="text-zinc-400 mb-2">Run command:</div>
+                <pre class="text-amber-400 mb-2 whitespace-pre-wrap">${data.confirm_command.command.replace(/</g, '&lt;')}</pre>
+                <div class="flex gap-2">
+                  <button class="cmd-approve px-3 py-1 rounded font-medium" style="color:#4ade80">✓ Approve</button>
+                  <button class="cmd-deny px-3 py-1 rounded font-medium" style="color:#f87171">✕ Deny</button>
+                </div>`;
+              toolUseContainer.appendChild(confirmDiv);
+              responseArea.scrollTop = responseArea.scrollHeight;
+
+              const approveBtn = confirmDiv.querySelector('.cmd-approve');
+              const denyBtn = confirmDiv.querySelector('.cmd-deny');
+              const respond = async (approved) => {
+                approveBtn.disabled = true;
+                denyBtn.disabled = true;
+                confirmDiv.querySelector('.flex').innerHTML = `<span class="${approved ? 'text-green-400' : 'text-red-400'}">${approved ? 'Approved' : 'Denied'}</span>`;
+                await fetch(`/api/conversations/${state.currentConversationId}/confirm`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ approved }),
+                });
+              };
+              approveBtn.addEventListener('click', () => respond(true));
+              denyBtn.addEventListener('click', () => respond(false));
+              const onEnter = (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); document.removeEventListener('keydown', onEnter); respond(true); }
+              };
+              document.addEventListener('keydown', onEnter);
             }
             if (data.content) {
               if (hasReasoning) reasoningSummary.textContent = 'Thought process';
