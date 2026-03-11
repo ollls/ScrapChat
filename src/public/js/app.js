@@ -467,7 +467,32 @@ async function sendMessage(content, images) {
               reasoningBody.textContent = accumulatedReasoning;
               responseArea.scrollTop = responseArea.scrollHeight;
             }
+            if (data.tool_content) {
+              // Show LLM's text during tool rounds so user knows it's not hung
+              if (!hasToolUse) {
+                hasToolUse = true;
+                bubble.insertBefore(toolUseContainer, contentSpan);
+              }
+              if (!toolUseContainer._thinkingEl) {
+                const el = document.createElement('details');
+                el.className = 'mb-2 text-zinc-500 text-xs';
+                el.open = true;
+                el.innerHTML = '<summary class="cursor-pointer select-none text-zinc-500 hover:text-zinc-400"><span class="mr-1">⏳</span> Working...</summary>';
+                const body = document.createElement('pre');
+                body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
+                el.appendChild(body);
+                toolUseContainer.appendChild(el);
+                toolUseContainer._thinkingEl = body;
+              }
+              toolUseContainer._thinkingEl.textContent += data.tool_content;
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
             if (data.tool_use) {
+              // Clear the "Working..." indicator when a tool result arrives
+              if (toolUseContainer._thinkingEl) {
+                toolUseContainer._thinkingEl.closest('details').remove();
+                delete toolUseContainer._thinkingEl;
+              }
               trackToolUse(data.tool_use.name);
               if (!hasToolUse) {
                 hasToolUse = true;
@@ -492,6 +517,17 @@ async function sendMessage(content, images) {
               detail.appendChild(summary);
               detail.appendChild(body);
               toolUseContainer.appendChild(detail);
+              // Render _markdown tables directly so the LLM doesn't have to retype numbers
+              try {
+                const parsed = JSON.parse(data.tool_use.result);
+                if (parsed._markdown) {
+                  const mdDiv = document.createElement('div');
+                  mdDiv.className = 'my-2 text-sm';
+                  renderFormattedContent(parsed._markdown, mdDiv);
+                  toolUseContainer.appendChild(mdDiv);
+                }
+              } catch {}
+
               const dl = makeFileDownloadLink(data.tool_use.name, data.tool_use.result);
               if (dl) toolUseContainer.appendChild(dl);
               responseArea.scrollTop = responseArea.scrollHeight;
@@ -533,6 +569,11 @@ async function sendMessage(content, images) {
               document.addEventListener('keydown', onEnter);
             }
             if (data.content) {
+              // Clear the "Working..." indicator when final content arrives
+              if (toolUseContainer._thinkingEl) {
+                toolUseContainer._thinkingEl.closest('details').remove();
+                delete toolUseContainer._thinkingEl;
+              }
               if (hasReasoning) reasoningSummary.textContent = 'Thought process';
               accumulated += data.content;
               scheduleRender(accumulated, contentSpan);
@@ -1145,6 +1186,16 @@ function renderTools(tools) {
   }
 }
 
+function expandPromptMacros(text) {
+  const now = new Date();
+  return text
+    .replace(/\{\$date\}/gi, now.toLocaleDateString('en-CA'))
+    .replace(/\{\$time\}/gi, now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }))
+    .replace(/\{\$year\}/gi, String(now.getFullYear()))
+    .replace(/\{\$month\}/gi, now.toLocaleDateString('en-US', { month: 'long' }))
+    .replace(/\{\$day\}/gi, now.toLocaleDateString('en-US', { weekday: 'long' }));
+}
+
 async function refreshPrompts() {
   try {
     const prompts = await (await fetch('/api/prompts')).json();
@@ -1206,7 +1257,7 @@ function renderPrompts(prompts) {
     });
 
     item.addEventListener('click', () => {
-      input.value = p.text;
+      input.value = expandPromptMacros(p.text);
       input.style.height = 'auto';
       input.style.height = Math.min(input.scrollHeight, 200) + 'px';
       input.focus();

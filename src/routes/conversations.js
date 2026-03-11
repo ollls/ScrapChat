@@ -2,7 +2,7 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks } from '../services/llm.js';
-import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation } from '../services/tools.js';
+import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation } from '../services/tools.js';
 
 const router = Router();
 
@@ -82,7 +82,10 @@ router.post('/:id/messages', async (req, res) => {
   const msgIndex = conv.messages.length - 1;
 
   const abortController = new AbortController();
-  res.on('close', () => abortController.abort());
+  res.on('close', () => {
+    abortController.abort();
+    cancelConfirmation(conv.id);
+  });
 
   try {
     // Build messages with system prompt for tool support
@@ -116,7 +119,8 @@ router.post('/:id/messages', async (req, res) => {
 
     // Stream one LLM round: forwards reasoning chunks to client in real-time,
     // buffers content for tool-call detection, returns { content, usage }.
-    async function streamRound(messages, opts) {
+    // When isToolRound=true, streams content tokens as {tool_content} events for user feedback.
+    async function streamRound(messages, opts, isToolRound = false) {
       const response = await streamChatCompletion(messages, opts);
       let content = '';
       let usage = null;
@@ -129,6 +133,10 @@ router.post('/:id/messages', async (req, res) => {
         }
         if (delta?.content) {
           content += delta.content;
+          // During tool rounds, stream content so user sees progress instead of dead screen
+          if (isToolRound) {
+            res.write(`data: ${JSON.stringify({ tool_content: delta.content })}\n\n`);
+          }
         }
         // Usage: llama-server sends timings, OpenAI sends usage
         const timings = chunk.timings || chunk.usage;
@@ -143,22 +151,43 @@ router.post('/:id/messages', async (req, res) => {
     }
 
     const MAX_TOOL_ROUNDS = 5;
+    const MAX_SAME_TOOL_REPEATS = 2;
     let finalContent = '';
     let lastUsage = null;
     let accumulatedReasoning = '';
     const toolUses = [];
+    const toolCallCounts = {}; // track per-tool call counts
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      // Stream content as tool_content so user sees progress during generation
       const result = await streamRound(llmMessages, {
         slotId,
         signal: abortController.signal,
-      });
+      }, true);
 
       if (result.usage) lastUsage = result.usage;
 
       const toolCallsFound = parseToolCalls(result.content);
       if (toolCallsFound.length > 0) {
+        // Check for repeated same-tool calls (prevents retry loops)
+        for (const tc of toolCallsFound) {
+          toolCallCounts[tc.name] = (toolCallCounts[tc.name] || 0) + 1;
+        }
+        const overLimit = toolCallsFound.filter(tc => toolCallCounts[tc.name] > MAX_SAME_TOOL_REPEATS);
+        if (overLimit.length > 0) {
+          console.warn(`[tool-loop] tool "${overLimit[0].name}" called ${toolCallCounts[overLimit[0].name]} times, breaking retry loop`);
+          llmMessages.push({ role: 'assistant', content: result.content });
+          llmMessages.push({
+            role: 'user',
+            content: `Tool "${overLimit[0].name}" has been called ${toolCallCounts[overLimit[0].name]} times. Stop retrying and provide your best answer using the results you have so far. If there was an error, explain what went wrong.`,
+          });
+          continue;
+        }
+
         // Execute all tool calls in parallel
+        const toolNames = toolCallsFound.map(tc => tc.name).join(', ');
+        console.log(`[tool-loop] round ${round + 1}: executing ${toolCallsFound.length} tool(s): ${toolNames}`);
+        const roundStart = Date.now();
         const context = {
           confirmFn: (command) => {
             res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
@@ -168,16 +197,29 @@ router.post('/:id/messages', async (req, res) => {
         const results = await Promise.all(
           toolCallsFound.map(tc => executeTool(tc.name, tc.arguments, context))
         );
+        console.log(`[tool-loop] round ${round + 1}: all tools finished in ${((Date.now() - roundStart) / 1000).toFixed(1)}s`);
         const resultParts = [];
         for (let i = 0; i < toolCallsFound.length; i++) {
           toolUses.push({ name: toolCallsFound[i].name, result: results[i] });
           res.write(`data: ${JSON.stringify({ tool_use: { name: toolCallsFound[i].name, result: results[i] } })}\n\n`);
-          resultParts.push(`Tool "${toolCallsFound[i].name}" result: ${results[i]}`);
+          // If result has _markdown, send the markdown table to LLM (clean, structured data)
+          let llmResult = results[i];
+          try {
+            const parsed = JSON.parse(results[i]);
+            if (parsed._markdown) {
+              const { _markdown, ...summary } = parsed;
+              llmResult = _markdown + (Object.keys(summary).length ? '\n\n' + JSON.stringify(summary) : '');
+            }
+          } catch {}
+          resultParts.push(`Tool "${toolCallsFound[i].name}" result: ${llmResult}`);
         }
         llmMessages.push({ role: 'assistant', content: result.content });
         llmMessages.push({ role: 'user', content: resultParts.join('\n\n') });
       } else {
         // Final answer — no tool call
+        if (/<tool_call/i.test(result.content)) {
+          console.warn(`[tool-loop] response contains <tool_call> tag but parseToolCalls found nothing. Content (first 500 chars):\n${result.content.slice(0, 500)}`);
+        }
         finalContent = result.content;
         break;
       }
@@ -193,9 +235,36 @@ router.post('/:id/messages', async (req, res) => {
       const forced = await streamRound(llmMessages, {
         slotId,
         signal: abortController.signal,
-      });
-      finalContent = forced.content;
+      }, true);
       if (forced.usage) lastUsage = forced.usage;
+
+      // If the LLM STILL emitted a tool call, try one last execution
+      const lastChanceCalls = parseToolCalls(forced.content);
+      if (lastChanceCalls.length > 0) {
+        console.warn(`[tool-loop] forced answer still contains tool call(s): ${lastChanceCalls.map(c => c.name).join(', ')}, executing last chance`);
+        const context = {
+          confirmFn: (command) => {
+            res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
+            return requestConfirmation(conv.id, command);
+          },
+        };
+        const results = await Promise.all(
+          lastChanceCalls.map(tc => executeTool(tc.name, tc.arguments, context))
+        );
+        for (let i = 0; i < lastChanceCalls.length; i++) {
+          toolUses.push({ name: lastChanceCalls[i].name, result: results[i] });
+          res.write(`data: ${JSON.stringify({ tool_use: { name: lastChanceCalls[i].name, result: results[i] } })}\n\n`);
+        }
+        // One final round for the answer
+        llmMessages.push({ role: 'assistant', content: forced.content });
+        const resultParts = lastChanceCalls.map((tc, i) => `Tool "${tc.name}" result: ${results[i]}`);
+        llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + '\n\nNow provide your final answer. Do NOT call any tools.' });
+        const final2 = await streamRound(llmMessages, { slotId, signal: abortController.signal }, true);
+        finalContent = final2.content;
+        if (final2.usage) lastUsage = final2.usage;
+      } else {
+        finalContent = forced.content;
+      }
     }
 
     // Send final content as a single event

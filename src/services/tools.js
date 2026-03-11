@@ -1,14 +1,17 @@
 import { Readability } from '@mozilla/readability';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, writeFile, readFile, readdir, stat, unlink } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { homedir } from 'os';
+import { spawn } from 'child_process';
 import config from '../config.js';
 import etrade from './etrade.js';
 
 const __dirname = import.meta.dirname || (() => { const f = fileURLToPath(import.meta.url); return f.substring(0, f.lastIndexOf('/')); })();
 const DATA_DIR = resolve(__dirname, '../../data');
+const PYTHON_VENV = (config.python.venvPath || '').replace(/^~/, homedir());
 
 // ── File save helper ─────────────────────────────────
 async function saveToFile(filename, content) {
@@ -147,7 +150,7 @@ function accountsToMd(data) {
   const accounts = data?.accounts || [];
   if (!accounts.length) return '';
   const headers = ['Account ID', 'Name', 'Type', 'Status'];
-  const rows = accounts.map(a => [a.accountId || '', a.accountName || '', a.accountType || '', a.accountStatus || '']);
+  const rows = accounts.map(a => [a.accountId || '', a.accountDesc || a.accountName || '', a.accountType || '', a.accountStatus || '']);
   return toMd(`Accounts (${accounts.length})`, headers, rows);
 }
 
@@ -326,6 +329,65 @@ function alertsToMd(data) {
   return toMd(`Alerts (${alerts.length})`, headers, rows);
 }
 
+function alertDetailToMd(data) {
+  const headers = ['Field', 'Value'];
+  const rows = [
+    ['Alert ID', data.id ?? ''],
+    ['Date', data.createDate || data.createTime || ''],
+    ['Subject', data.subject || ''],
+    ['Status', data.status || ''],
+    ['Symbol', data.symbol || ''],
+  ];
+  if (data.msgText) rows.push(['Message', data.msgText]);
+  if (data.readDate || data.readTime) rows.push(['Read Date', data.readDate || data.readTime]);
+  if (data.deleteDate || data.deleteTime) rows.push(['Delete Date', data.deleteDate || data.deleteTime]);
+  if (data.next) rows.push(['Next Alert ID', data.next]);
+  return toMd('Alert Detail', headers, rows);
+}
+
+function alertDetailToCsv(data) {
+  const headers = ['Alert ID', 'Date', 'Subject', 'Status', 'Symbol', 'Message'];
+  const row = [data.id ?? '', data.createDate || data.createTime || '', data.subject || '', data.status || '', data.symbol || '', data.msgText || ''];
+  return toCsv(headers, [row]);
+}
+
+function transactionDetailToMd(data) {
+  const t = data || {};
+  const b = t.brokerage || {};
+  const p = b.product || {};
+  const headers = ['Field', 'Value'];
+  const rows = [
+    ['Transaction ID', t.transactionId ?? ''],
+    ['Date', t.transactionDate ? new Date(t.transactionDate).toISOString().split('T')[0] : ''],
+    ['Type', t.transactionType || ''],
+    ['Description', t.description?.trim() || ''],
+    ['Amount', t.amount ?? ''],
+  ];
+  if (p.symbol) rows.push(['Symbol', p.symbol]);
+  if (p.securityType) rows.push(['Security Type', p.securityType]);
+  if (p.callPut) rows.push(['Call/Put', p.callPut]);
+  if (p.strikePrice != null) rows.push(['Strike', p.strikePrice]);
+  if (p.expiryYear) rows.push(['Expiry', `20${String(p.expiryYear).padStart(2, '0')}-${String(p.expiryMonth).padStart(2, '0')}-${String(p.expiryDay).padStart(2, '0')}`]);
+  if (b.quantity != null) rows.push(['Quantity', b.quantity]);
+  if (b.price != null) rows.push(['Price', b.price]);
+  if (b.fee != null) rows.push(['Fee', b.fee]);
+  if (b.settlementDate) rows.push(['Settlement Date', b.settlementDate]);
+  if (b.settlementCurrency) rows.push(['Settlement Currency', b.settlementCurrency]);
+  if (b.paymentCurrency) rows.push(['Payment Currency', b.paymentCurrency]);
+  return toMd('Transaction Detail', headers, rows);
+}
+
+function transactionDetailToCsv(data) {
+  const t = data || {};
+  const b = t.brokerage || {};
+  const p = b.product || {};
+  const date = t.transactionDate ? new Date(t.transactionDate).toISOString().split('T')[0] : '';
+  const expiry = p.expiryYear ? `20${String(p.expiryYear).padStart(2, '0')}-${String(p.expiryMonth).padStart(2, '0')}-${String(p.expiryDay).padStart(2, '0')}` : '';
+  const headers = ['Transaction ID', 'Date', 'Type', 'Symbol', 'Security Type', 'Call/Put', 'Strike', 'Expiry', 'Quantity', 'Price', 'Amount', 'Fee', 'Description'];
+  const row = [t.transactionId ?? '', date, t.transactionType || '', p.symbol || '', p.securityType || '', p.callPut || '', p.strikePrice ?? '', expiry, b.quantity ?? '', b.price ?? '', t.amount ?? '', b.fee ?? '', t.description?.trim() || ''];
+  return toCsv(headers, [row]);
+}
+
 function gainsToMd(data) {
   const rows = (data.gains || []).map(g => [
     g.symbol, g.callPut || '', g.strikePrice ?? '', g.dateAcquired ?? '',
@@ -472,6 +534,41 @@ const tools = {
       return await saveToFile(filename, content);
     },
   },
+  list_files: {
+    description: 'List files in the data directory. No arguments needed. Returns filename, size, and last modified date for each file.',
+    parameters: {},
+    execute: async () => {
+      await mkdir(DATA_DIR, { recursive: true });
+      const entries = await readdir(DATA_DIR);
+      const files = await Promise.all(entries.map(async (name) => {
+        const s = await stat(join(DATA_DIR, name));
+        if (!s.isFile()) return null;
+        return { name, size: s.size, modified: s.mtime.toISOString() };
+      }));
+      return files.filter(Boolean);
+    },
+  },
+  file_read: {
+    description: 'Read contents of a file from the data directory. Requires "filename". Optional "head" (number of lines from start). Use to inspect CSVs, downloaded files, or results from other tools.',
+    parameters: { filename: 'string', head: 'number (optional)' },
+    execute: async ({ filename, head }) => {
+      if (!filename?.trim()) return { error: 'filename is required' };
+      const safe = basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filePath = join(DATA_DIR, safe);
+      try {
+        let content = await readFile(filePath, 'utf-8');
+        const totalLines = content.split('\n').length;
+        if (head && head > 0) {
+          content = content.split('\n').slice(0, head).join('\n');
+        }
+        if (content.length > 10000) content = content.slice(0, 10000) + '\n...[truncated]';
+        return { filename: safe, totalLines, content };
+      } catch (err) {
+        if (err.code === 'ENOENT') return { error: `File not found: ${safe}` };
+        return { error: err.message };
+      }
+    },
+  },
   run_command: {
     description: 'Run a shell command on the server. Requires user approval before execution. Requires a "command" argument (the shell command to run). Use for tasks like listing files, checking system info, installing packages, or any shell operation the user requests.',
     parameters: { command: 'string' },
@@ -501,8 +598,83 @@ const tools = {
       }
     },
   },
+  run_python: {
+    description: 'Execute a Python script. Requires user approval. Requires "code" (Python source). The script runs with cwd set to the data directory, so it can read/write data files directly by filename. Any new or modified files are auto-detected and returned with download URLs.\n\nOutput rules:\n- Quick answers (single number, short list, yes/no) → print() to console.\n- Reports, tables, formatted results → save to a file (CSV, MD, or HTML) AND print() a brief summary. Example: write a CSV then print("Saved net_income_report.csv — 12 rows, total: $45,230").\n- Charts/visualizations → save as PNG/HTML file. Use matplotlib, plotly, etc.\n- ALWAYS print() something so the user sees immediate feedback, even when saving files.\n- NEVER hardcode or inline data in the script. If data files exist in the data directory (check with list_files first), read them with Python (e.g. pandas.read_csv, open()). The script runs in the data directory so just use the filename directly.\n- Keep scripts concise. Use pandas for CSV processing when appropriate.',
+    parameters: { code: 'string' },
+    execute: async ({ code }, context) => {
+      const t0 = Date.now();
+      const elapsed = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+      if (!code?.trim()) return { error: 'code is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      console.log(`[run_python] requesting user confirmation...`);
+      const approved = await context.confirmFn(`Python script:\n${code}`);
+      console.log(`[run_python] confirmation ${approved ? 'approved' : 'denied'} (${elapsed()})`);
+      if (!approved) return { denied: true, message: 'User denied Python execution.' };
+
+      await mkdir(DATA_DIR, { recursive: true });
+      const tmpFile = join(DATA_DIR, '.tmp_script.py');
+      await writeFile(tmpFile, code, 'utf-8');
+
+      // Snapshot files before execution to detect new/changed files
+      const before = new Map();
+      for (const name of await readdir(DATA_DIR)) {
+        if (name.startsWith('.tmp_script')) continue;
+        const s = await stat(join(DATA_DIR, name)).catch(() => null);
+        if (s?.isFile()) before.set(name, s.mtimeMs);
+      }
+      console.log(`[run_python] file snapshot: ${before.size} existing files (${elapsed()})`);
+
+      const pythonBin = PYTHON_VENV ? join(PYTHON_VENV, 'bin', 'python') : 'python3';
+      console.log(`[run_python] spawning: ${pythonBin} ${tmpFile} (timeout=120s) (${elapsed()})`);
+      const TIMEOUT_MS = 120000;
+      const { exitCode, stdout, stderr, timedOut } = await new Promise((resolve) => {
+        let out = '', err = '', resolved = false;
+        const finish = (result) => { if (!resolved) { resolved = true; resolve(result); } };
+        const proc = spawn(pythonBin, [tmpFile], {
+          cwd: DATA_DIR,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const killTimer = setTimeout(() => {
+          console.warn(`[run_python] TIMEOUT after ${TIMEOUT_MS / 1000}s — killing pid ${proc.pid}`);
+          proc.kill('SIGKILL');
+          finish({ exitCode: 137, stdout: out, stderr: err + '\n[run_python] Process killed: exceeded 120s timeout', timedOut: true });
+        }, TIMEOUT_MS);
+        proc.stdout.on('data', (d) => { if (out.length < 2 * 1024 * 1024) out += d; });
+        proc.stderr.on('data', (d) => { if (err.length < 2 * 1024 * 1024) err += d; });
+        proc.on('close', (code) => { clearTimeout(killTimer); finish({ exitCode: code ?? 1, stdout: out, stderr: err, timedOut: false }); });
+        proc.on('error', (e) => { clearTimeout(killTimer); finish({ exitCode: 1, stdout: '', stderr: e.message, timedOut: false }); });
+      });
+      console.log(`[run_python] process exited: code=${exitCode} timedOut=${timedOut} stdout=${stdout.length}B stderr=${stderr.length}B (${elapsed()})`);
+      await unlink(tmpFile).catch(() => {});
+
+      // Detect new or modified files
+      const outputFiles = [];
+      for (const name of await readdir(DATA_DIR)) {
+        if (name.startsWith('.tmp_script')) continue;
+        const s = await stat(join(DATA_DIR, name)).catch(() => null);
+        if (!s?.isFile()) continue;
+        const prevMtime = before.get(name);
+        if (prevMtime === undefined || s.mtimeMs > prevMtime) {
+          outputFiles.push({
+            name,
+            size: s.size,
+            url: `/files/${encodeURIComponent(name)}`,
+          });
+        }
+      }
+      console.log(`[run_python] detected ${outputFiles.length} new/modified files (${elapsed()})`);
+
+      const result = { exitCode, stdout: stdout.slice(0, 8000) };
+      if (timedOut) result.timedOut = true;
+      if (stderr) result.stderr = stderr.slice(0, 4000);
+      if (outputFiles.length) result.files = outputFiles;
+      console.log(`[run_python] done (${elapsed()})`);
+      return result;
+    },
+  },
   etrade_account: {
-    description: 'Retrieve E*TRADE brokerage and market data. Requires an "action" argument.\n\n**Account actions** (require "accountIdKey" — encoded string key from "list" action, NOT numeric accountId):\n- "list": list accounts\n- "balance": account balance\n- "portfolio": positions/holdings\n- "transactions": transaction history (auto-paginates to fetch ALL matching transactions within the date range; **defaults to last 30 days only** — always tell the user what date range was queried so they know older transactions exist; use startDate/endDate in MMDDYYYY to query other periods; maxPages to limit pagination — 0=unlimited which is the default)\n- "gains": unrealized gains with lot-level cost basis and short/long term\n- "orders": order history (optional status: OPEN/EXECUTED/CANCELLED/etc, fromDate/toDate in MMDDYYYY, count max 100)\n- "transaction_detail": single transaction detail (requires transactionId)\n\n**Market data actions** (no accountIdKey needed):\n- "quote": real-time quotes (requires "symbols" — comma-separated, up to 25; optional detailFlag: ALL/FUNDAMENTAL/INTRADAY/OPTIONS/WEEK_52)\n- "optionchains": option chains with full Greeks (Delta, Gamma, Theta, Vega, Rho, IV) and bid/ask/volume/OI (requires "symbol"; optional expiryYear/expiryMonth/expiryDay, strikePriceNear, noOfStrikes, chainType: CALL/PUT/CALLPUT, includeWeekly)\n- "optionexpiry": option expiration dates (requires "symbol")\n- "lookup": product/symbol lookup (requires "search" — company name or partial symbol)\n\n**User alerts:**\n- "alerts": account/stock alerts (optional count 1-300, category: STOCK/ACCOUNT, status: READ/UNREAD)\n- "alert_detail": single alert detail (requires alertId)\n\nTo export data, add "saveAs" with a filename (.csv/.md/.json). Usage guide: "gains" for open positions with cost basis; "transactions" for trade history; "orders" for order status/fills; "quote" for current prices; "optionchains" for available options with Greeks (Delta, Theta, IV, etc.).',
+    description: 'Retrieve E*TRADE brokerage and market data. Requires an "action" argument.\n\n**Account actions** (require "accountIdKey" — encoded string key from "list" action, NOT numeric accountId):\n- "list": list accounts\n- "balance": account balance\n- "portfolio": positions/holdings\n- "transactions": transaction history (auto-paginates to fetch ALL matching transactions within the date range; **defaults to Jan 1 of current year** if no startDate given; use startDate/endDate in MMDDYYYY to query other periods; ALWAYS pass startDate explicitly when the user specifies a date range — never ask the user to confirm, just do it; maxPages to limit pagination — 0=unlimited which is the default)\n- "gains": unrealized gains with lot-level cost basis and short/long term\n- "orders": order history (optional status: OPEN/EXECUTED/CANCELLED/etc, fromDate/toDate in MMDDYYYY, count max 100)\n- "transaction_detail": single transaction detail (requires transactionId)\n\n**Market data actions** (no accountIdKey needed):\n- "quote": real-time quotes (requires "symbols" — comma-separated, up to 25; optional detailFlag: ALL/FUNDAMENTAL/INTRADAY/OPTIONS/WEEK_52)\n- "optionchains": option chains with full Greeks (Delta, Gamma, Theta, Vega, Rho, IV) and bid/ask/volume/OI (requires "symbol"; optional expiryYear/expiryMonth/expiryDay, strikePriceNear, noOfStrikes, chainType: CALL/PUT/CALLPUT, includeWeekly)\n- "optionexpiry": option expiration dates (requires "symbol")\n- "lookup": product/symbol lookup (requires "search" — company name or partial symbol)\n\n**User alerts:**\n- "alerts": account/stock alerts (optional count 1-300, category: STOCK/ACCOUNT, status: READ/UNREAD)\n- "alert_detail": single alert detail (requires alertId)\n\nTo export data, add "saveAs" with a filename (.csv/.md/.json). Usage guide: "gains" for open positions with cost basis; "transactions" for trade history; "orders" for order status/fills; "quote" for current prices; "optionchains" for available options with Greeks (Delta, Theta, IV, etc.).',
     parameters: { action: 'string', accountIdKey: 'string (optional)', startDate: 'string (optional)', endDate: 'string (optional)', count: 'number (optional)', maxPages: 'number (optional, transactions only — 0=unlimited, default 0)', saveAs: 'string (optional)', symbols: 'string (optional)', symbol: 'string (optional)', detailFlag: 'string (optional)', expiryYear: 'string (optional)', expiryMonth: 'string (optional)', expiryDay: 'string (optional)', strikePriceNear: 'string (optional)', noOfStrikes: 'string (optional)', chainType: 'string (optional)', includeWeekly: 'boolean (optional)', search: 'string (optional)', status: 'string (optional)', fromDate: 'string (optional)', toDate: 'string (optional)', category: 'string (optional)', transactionId: 'string (optional)', alertId: 'string (optional)' },
     execute: async ({ action, accountIdKey, startDate, endDate, count, maxPages, saveAs, symbols, symbol, detailFlag, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly, search, status, fromDate, toDate, category, transactionId, alertId }) => {
       if (!etrade.isAuthenticated()) {
@@ -571,13 +743,34 @@ const tools = {
         balance: balanceToCsv, gains: gainsToCsv, quote: quotesToCsv,
         optionchains: optionChainsToCsv, optionexpiry: optionExpireDatesToCsv,
         lookup: lookupToCsv, orders: ordersToCsv, alerts: alertsToCsv,
+        alert_detail: alertDetailToCsv, transaction_detail: transactionDetailToCsv,
       };
       const mdFormatters = {
         transactions: transactionsToMd, portfolio: portfolioToMd, list: accountsToMd,
         balance: balanceToMd, gains: gainsToMd, quote: quotesToMd,
         optionchains: optionChainsToMd, optionexpiry: optionExpireDatesToMd,
         lookup: lookupToMd, orders: ordersToMd, alerts: alertsToMd,
+        alert_detail: alertDetailToMd, transaction_detail: transactionDetailToMd,
       };
+      // Extract lightweight summary metadata per action
+      function summarize(act, res) {
+        switch (act) {
+          case 'list': return { totalCount: res.totalCount ?? res.accounts?.length ?? 0 };
+          case 'balance': return { accountId: (res.accountId || ''), accountType: (res.accountType || '') };
+          case 'portfolio': return { totalPositions: res.totalPositions ?? res.AccountPortfolio?.[0]?.Position?.length ?? 0 };
+          case 'transactions': return { totalCount: res.totalCount ?? 0, pagesFetched: res.pagesFetched ?? 1, queryStartDate: res.queryStartDate, queryEndDate: res.queryEndDate };
+          case 'gains': return { totalCount: res.totalCount ?? 0, totalGain: res.totalGain, totalGainPct: res.totalGainPct };
+          case 'quote': return { totalCount: res.totalCount ?? res.quotes?.length ?? 0 };
+          case 'optionchains': return { totalPairs: res.OptionPair?.length ?? 0 };
+          case 'optionexpiry': return { totalCount: res.totalCount ?? res.expirationDates?.length ?? 0 };
+          case 'lookup': return { totalCount: res.totalCount ?? res.products?.length ?? 0 };
+          case 'orders': return { totalCount: res.totalCount ?? res.Order?.length ?? 0 };
+          case 'alerts': return { totalCount: res.totalCount ?? res.Alert?.length ?? 0 };
+          case 'alert_detail': return { alertId: res.id ?? '' };
+          case 'transaction_detail': return { transactionId: res.transactionId ?? '' };
+          default: return {};
+        }
+      }
       // Save to file if requested
       if (saveAs && result && !result.error) {
         let content;
@@ -590,16 +783,40 @@ const tools = {
         }
         if (!content) return { ...result, saveError: 'No data to save' };
         const file = await saveToFile(saveAs, content);
-        const summary = action === 'transactions'
-          ? { transactionCount: result.transactionCount || 0, totalCount: result.totalCount || 0, moreTransactions: result.moreTransactions || false }
-          : { recordCount: result.totalCount ?? (Array.isArray(result) ? result.length : 1) };
-        return { ...summary, savedFile: file };
+        return { ...summarize(action, result), savedFile: file };
       }
-      // Include pre-formatted markdown table so the LLM presents exact data
+      // For large result sets, auto-save to CSV and return summary + truncated preview
+      const ROW_THRESHOLD = 30;
+      const rowCount = result.Transaction?.length || result.AccountPortfolio?.[0]?.Position?.length || result.gains?.length || result.Order?.length || 0;
+      if (rowCount > ROW_THRESHOLD && formatters[action]) {
+        const autoFile = `${action}_${Date.now()}.csv`;
+        const csvContent = formatters[action](result);
+        if (csvContent) {
+          const file = await saveToFile(autoFile, csvContent);
+          const mdFormatter = mdFormatters[action];
+          // Build a truncated copy for the preview (first 15 rows)
+          const truncated = { ...result };
+          if (truncated.Transaction) truncated.Transaction = truncated.Transaction.slice(0, 15);
+          if (truncated.Order) truncated.Order = truncated.Order.slice(0, 15);
+          if (truncated.gains) truncated.gains = truncated.gains.slice(0, 15);
+          if (truncated.AccountPortfolio?.[0]?.Position) {
+            truncated.AccountPortfolio = [{ ...truncated.AccountPortfolio[0], Position: truncated.AccountPortfolio[0].Position.slice(0, 15) }];
+          }
+          const preview = mdFormatter ? mdFormatter(truncated) : null;
+          return {
+            ...summarize(action, result),
+            savedFile: file,
+            _autoSaved: true,
+            _note: `${rowCount} rows — auto-saved full data to ${autoFile}. Preview shows first 15 rows.`,
+            ...(preview ? { _markdown: preview } : {}),
+          };
+        }
+      }
+      // Return pre-formatted markdown table + lightweight summary (no raw data)
       const mdFormatter = mdFormatters[action];
       if (mdFormatter && result && !result.error) {
         const table = mdFormatter(result);
-        if (table) return { _markdown: table };
+        if (table) return { _markdown: table, ...summarize(action, result) };
       }
       return result;
     },
@@ -609,17 +826,37 @@ const tools = {
 // ── Command confirmation ────────────────────────────
 const pendingConfirmations = new Map(); // conversationId → { resolve, command }
 
+const CONFIRMATION_TIMEOUT_MS = 120000; // 2 minutes
+
 export function requestConfirmation(conversationId, command) {
   return new Promise((resolve) => {
-    pendingConfirmations.set(conversationId, { resolve, command });
+    const timer = setTimeout(() => {
+      if (pendingConfirmations.has(conversationId)) {
+        console.warn(`[confirm] timeout after ${CONFIRMATION_TIMEOUT_MS / 1000}s for conversation ${conversationId}`);
+        pendingConfirmations.delete(conversationId);
+        resolve(false);
+      }
+    }, CONFIRMATION_TIMEOUT_MS);
+    pendingConfirmations.set(conversationId, { resolve, command, timer });
   });
 }
 
 export function resolveConfirmation(conversationId, approved) {
   const pending = pendingConfirmations.get(conversationId);
   if (!pending) return false;
+  clearTimeout(pending.timer);
   pendingConfirmations.delete(conversationId);
   pending.resolve(approved);
+  return true;
+}
+
+export function cancelConfirmation(conversationId) {
+  const pending = pendingConfirmations.get(conversationId);
+  if (!pending) return false;
+  console.warn(`[confirm] cancelled for conversation ${conversationId} (client disconnected)`);
+  clearTimeout(pending.timer);
+  pendingConfirmations.delete(conversationId);
+  pending.resolve(false);
   return true;
 }
 
@@ -688,8 +925,31 @@ ${toolList}
 Tool rules:
 - Output ONLY <tool_call> blocks when using tools, no other text.
 - Wait for the tool result before answering.
+- Be proactive: when the user asks for data, CALL the tool immediately with the right parameters. NEVER ask "would you like me to run this?" or "should I re-run with different parameters?" — just do it.
+## FINANCIAL DATA INTEGRITY (applies to ALL E*TRADE / financial data)
+- NEVER interpret, reformat, summarize, round, abbreviate, recalculate, or manually transcribe financial data. E*TRADE tool results are authoritative — present them EXACTLY as returned, or save them to a file and let Python do the analysis. Dropping digits, misplacing decimals, or rounding dollar amounts is a serious error (e.g. $92,891.35 must stay $92,891.35 — never $924.83, $92,891, or $92.9K).
+- NEVER fabricate, interpolate, or invent financial figures. Only present values that appear verbatim in tool results. If a field or row doesn't exist in the data, don't create it.
+- For ANY calculation on financial data (sums, averages, filtering, grouping, date math, comparisons of more than 2-3 values) — ALWAYS save the data to a file first (using saveAs), then use run_python to process it. Never do mental math or manual arithmetic on financial figures.
+- When etrade_account returns a "_markdown" table, the UI renders it directly for the user. Do NOT repeat the table — instead, provide insights or answer the user's question. Use the pre-formatted table as your data source; do not recompute or omit rows.
+- ANALYSIS WORKFLOW: When the user asks to retrieve data AND perform calculations (e.g. "get transactions and calculate net income"), ALWAYS combine both steps into ONE etrade_account call with saveAs, then ONE run_python call. NEVER fetch data without saveAs when analysis is needed — the correct sequence is: (1) etrade_account with saveAs to get real data into a file, (2) run_python to read that file and compute results. This avoids dumping large tables on screen and ensures Python works with real data.
+- Large result sets (30+ rows) are auto-saved to CSV. When you see "_autoSaved" in the result, the full data is already in the saved file — use that filename in your run_python script. Do NOT re-fetch the data.
+
+## File & data workflow
+- To save E*TRADE data to a file — use etrade_account with the "saveAs" parameter (e.g. saveAs: "CURRENT_TRANSACTIONS.csv"). This is the ONLY correct way. NEVER use run_python or save_file to save E*TRADE data — the data would be fabricated. Only etrade_account has real data.
+- To see what data files are available — use list_files.
+- To read file contents (CSVs, text files, downloaded data) — use file_read. Use head parameter for large files.
+- To run Python scripts for data analysis, calculations, or CSV processing — use run_python. Scripts run in the data directory and can read/write files there directly. ONLY use run_python to process data that already exists in files — never to fetch or fabricate data.
+- run_python output strategy: For quick calculations, just print(). For reports, tables, or analysis results — ALWAYS save to a file (CSV for data, MD for formatted reports, HTML for rich reports, PNG for charts) AND print a short summary. The tool auto-detects created files and returns download URLs. Never dump large tables to stdout — save them to a file instead.
+- run_python data workflow: ALWAYS use list_files first to check what data files exist. Then use file_read with head=5 to inspect column names and data format BEFORE writing the processing script. NEVER guess column names — verify them first. NEVER copy-paste or hardcode file contents into the script — read them with pandas or open(). Exception: if etrade_account just auto-saved a file (you see "_autoSaved" and "savedFile" in the result), skip list_files/file_read — you already know the filename and columns from the markdown preview. USE THOSE EXACT COLUMN NAMES from the CSV (not the markdown preview which uses abbreviated names). Transaction CSV columns: Date, Transaction ID, Type, Symbol, Security Type, Call/Put, Strike, Expiry, Quantity, Price, Amount, Fee, Description. Portfolio CSV columns: Symbol, Description, Security Type, Call/Put, Strike, Expiry, Quantity, Price Paid, Market Value, Total Cost, Total Gain, Total Gain Pct. When in doubt, start your script with: df = pd.read_csv('file.csv'); print(df.columns.tolist()).
+- run_python code quality — MANDATORY rules:
+  1. NEVER use iterrows(), itertuples(), or for-loops over DataFrame rows. Use ONLY vectorized pandas: df.groupby(), df[condition]['Amount'].sum(), df.loc[], etc.
+  2. Keep scripts under 40 lines. One task per script.
+  3. Pick ONE output: print() a short summary OR save a file. Not both.
+  4. Before submitting: mentally verify every string literal, bracket, quote, and f-string brace. A syntax error wastes an entire tool round.
+  Example of CORRECT transaction analysis: df = pd.read_csv('file.csv'); by_type = df.groupby('Type')['Amount'].sum(); fees = df['Fee'].sum(); print(by_type.to_string()); print(f"Total fees: {fees:.2f}")
+- run_python error handling: If a script fails, DO NOT retry with the same approach. First run a small diagnostic script (e.g. print columns, print dtypes, print first row) to understand the data, then fix the actual issue. Maximum 1 retry after diagnosis.
+- WHEN TO USE run_python vs direct answer: USE run_python for: any calculation involving more than 3 numbers, aggregations (sum, avg, count, group-by), data with more than 10 rows, date math, filtering/sorting data, or any question where getting the wrong number would be harmful. ANSWER DIRECTLY for: single value lookups, qualitative questions, comparing 2-3 values, or explaining what data means. RULE OF THUMB: if you need to count, sum, or iterate — use Python. Never do mental math on financial data.
 - You are a LOCAL assistant running on the user's machine. You have real shell access via the run_command tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use run_command. NEVER say you cannot run commands or don't have access to the user's system.
-- Do not fabricate tool results. When etrade_account returns a "_markdown" field, use that pre-formatted table as your primary data source — present those exact values. Do not recompute, round, or omit rows.
 - After web_search, ALWAYS use web_fetch on the most relevant result URL to get full details before answering. Search snippets alone are not sufficient.
 - For ANY question about stock quotes, option chains, option Greeks, option expiration dates, or symbol lookup — ALWAYS use etrade_account (actions: quote, optionchains, optionexpiry, lookup) instead of web_search. These return real-time market data directly from E*TRADE. Only fall back to web_search if E*TRADE is not authenticated.
 - Options analysis workflow: (1) get current price with "quote", (2) get available expirations with "optionexpiry", (3) pick the expiry closest to the user's target DTE, (4) fetch the chain with "optionchains" using that expiry + strikePriceNear set to current price. NEVER guess prices, expiration dates, or Greeks — always fetch real data first.
@@ -718,15 +978,74 @@ Rules:
 }
 
 // Parse all <tool_call>...</tool_call> blocks from LLM output
+// Unescape JSON string escape sequences to produce the actual string value
+function unescapeJsonString(s) {
+  return s
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\r/g, '\r')
+    .replace(/\\\\/g, '\\')
+    .replace(/\\"/g, '"');
+}
+
+// Try to repair malformed JSON in tool calls (common with run_python code containing newlines/quotes)
+function repairToolCallJson(raw) {
+  const nameMatch = raw.match(/"name"\s*:\s*"([^"]+)"/);
+  if (!nameMatch) return null;
+  const name = nameMatch[1];
+
+  // Attempt 1: escape literal newlines/tabs/carriage-returns, then parse
+  try {
+    const fixed = raw.replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+    const parsed = JSON.parse(fixed);
+    if (parsed.name) {
+      console.log(`[parseToolCalls] repaired JSON by escaping newlines for tool "${name}"`);
+      return { name: parsed.name, arguments: parsed.arguments || {} };
+    }
+  } catch { /* continue to next attempt */ }
+
+  // Attempt 2: for run_python/run_command, manually extract the string argument
+  // then unescape JSON sequences so the code has real newlines (not literal \n)
+  const argName = name === 'run_python' ? 'code' : name === 'run_command' ? 'command' : null;
+  if (argName) {
+    const pattern = new RegExp(`"${argName}"\\s*:\\s*"`);
+    const argMatch = raw.match(pattern);
+    if (argMatch) {
+      const start = argMatch.index + argMatch[0].length;
+      // Walk backwards from end past closing braces/whitespace to find the closing quote
+      let end = raw.length - 1;
+      while (end > start && /[\s}]/.test(raw[end])) end--;
+      if (raw[end] === '"') {
+        const rawValue = raw.slice(start, end);
+        const value = unescapeJsonString(rawValue);
+        console.log(`[parseToolCalls] manually extracted "${argName}" (${value.length} chars) for tool "${name}"`);
+        return { name, arguments: { [argName]: value } };
+      }
+    }
+  }
+
+  return null;
+}
+
 export function parseToolCalls(text) {
   const calls = [];
 
   // Primary: extract all <tool_call> blocks
   for (const match of text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)) {
+    const raw = match[1];
     try {
-      const parsed = JSON.parse(match[1]);
+      const parsed = JSON.parse(raw);
       if (parsed.name) calls.push({ name: parsed.name, arguments: parsed.arguments || {} });
-    } catch { /* skip malformed */ }
+    } catch (e) {
+      // JSON parse failed — attempt repair (common with run_python code containing newlines)
+      console.warn(`[parseToolCalls] JSON.parse failed: ${e.message}`);
+      const repaired = repairToolCallJson(raw);
+      if (repaired) {
+        calls.push(repaired);
+      } else {
+        console.error(`[parseToolCalls] Could not repair tool call. Raw (first 300 chars):\n${raw.slice(0, 300)}`);
+      }
+    }
   }
   if (calls.length > 0) return calls;
 
@@ -751,7 +1070,11 @@ export function parseToolCalls(text) {
         const args = parsed.arguments.arguments ? parsed.arguments.arguments : parsed.arguments;
         calls.push({ name: parsed.name, arguments: args });
       }
-    } catch { /* skip malformed */ }
+    } catch {
+      // Bare JSON also failed — try repair
+      const repaired = repairToolCallJson(candidate);
+      if (repaired) calls.push(repaired);
+    }
     i = end;
   }
   return calls;
@@ -776,9 +1099,13 @@ export async function executeTool(name, args, context) {
     }
   }
   try {
+    console.log(`[tools] executing "${name}" args=${JSON.stringify(args).slice(0, 200)}`);
+    const t0 = Date.now();
     const result = await tool.execute(args, context);
+    console.log(`[tools] "${name}" completed in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     return JSON.stringify(result);
   } catch (err) {
+    console.error(`[tools] "${name}" error: ${err.message}`);
     return JSON.stringify({ error: err.message });
   }
 }
