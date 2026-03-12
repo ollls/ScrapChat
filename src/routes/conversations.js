@@ -159,7 +159,6 @@ router.post('/:id/messages', async (req, res) => {
     const toolUses = [];
     const toolCallCounts = {}; // track per-tool call counts
     let hadChainData = false;        // whether any optionchains call has completed
-    const savedFiles = [];            // filenames from saveAs / auto-save results
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // Stream content as tool_content so user sees progress during generation
@@ -238,21 +237,22 @@ router.post('/:id/messages', async (req, res) => {
         llmMessages.push({ role: 'assistant', content: result.content });
         const roundsLeft = MAX_TOOL_ROUNDS - round - 1;
 
-        // Track chain completions and saved files
+        // Track chain completions and files saved THIS round
+        const roundSavedFiles = [];
         for (const tc of toolCallsFound) {
           if (tc.arguments?.action === 'optionchains') hadChainData = true;
         }
         for (const r of results) {
           try {
             const p = JSON.parse(r);
-            if (p.savedFile?.filename) savedFiles.push(p.savedFile.filename);
+            if (p.savedFile?.filename) roundSavedFiles.push(p.savedFile.filename);
           } catch {}
         }
 
-        // Directive: nudge LLM toward next step based on what's missing
+        // Directive: nudge LLM toward next step based on this round's results
         let directive = '';
-        if (savedFiles.length > 0) {
-          directive = `Data saved to: ${savedFiles.join(', ')}. Use run_python to analyze. Do NOT re-fetch data you already have.`;
+        if (roundSavedFiles.length > 0) {
+          directive = `This round saved: ${roundSavedFiles.join(', ')}. Use run_python to analyze these files. Do NOT re-fetch data you already have.`;
         } else if (!hadChainData) {
           directive = 'NOW call optionchains (with saveAs and strikePriceNear) for the expiries you need. Do NOT re-fetch quote or optionexpiry.';
         }
