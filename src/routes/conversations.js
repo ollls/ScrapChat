@@ -159,6 +159,7 @@ router.post('/:id/messages', async (req, res) => {
     const toolUses = [];
     const toolCallCounts = {}; // track per-tool call counts
     let hadChainData = false;        // whether any optionchains call has completed
+    let hadExpiryCall = false;       // whether optionexpiry was called (signals options analysis)
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // Stream content as tool_content so user sees progress during generation
@@ -241,6 +242,7 @@ router.post('/:id/messages', async (req, res) => {
         const roundSavedFiles = [];
         for (const tc of toolCallsFound) {
           if (tc.arguments?.action === 'optionchains') hadChainData = true;
+          if (tc.arguments?.action === 'optionexpiry') hadExpiryCall = true;
         }
         for (const r of results) {
           try {
@@ -261,6 +263,13 @@ router.post('/:id/messages', async (req, res) => {
         llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + toolReminder });
       } else {
         // Final answer — no tool call found by parser
+        // If LLM fetched optionexpiry (signals options analysis) but never called optionchains, force continuation
+        if (!hadChainData && round < MAX_TOOL_ROUNDS - 1 && hadExpiryCall) {
+          console.warn(`[tool-loop] round ${round + 1}: LLM stopped after prep data without fetching option chains — forcing continuation`);
+          llmMessages.push({ role: 'assistant', content: result.content });
+          llmMessages.push({ role: 'user', content: 'You have NOT completed the task. You fetched quote/expiry data but did not fetch the option chain data needed for analysis. Call optionchains NOW with saveAs, strikePriceNear, and the expiry dates from the optionexpiry results above. Example:\n<tool_call>\n{"name": "etrade_account", "arguments": {"action": "optionchains", "symbol": "MU", "expiryYear": 2026, "expiryMonth": 4, "expiryDay": 17, "strikePriceNear": 406, "saveAs": "MU_chain_apr17.csv"}}\n</tool_call>' });
+          continue;
+        }
         // Detect bare JSON or truncated tool calls and retry the round
         if (/\{"name"\s*:\s*"/.test(result.content)) {
           console.warn(`[tool-loop] response contains bare/truncated JSON tool call but parseToolCalls found nothing. Content (last 200 chars): ...${result.content.slice(-200)}`);
