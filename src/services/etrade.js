@@ -132,6 +132,9 @@ async function getGains(accountIdKey) {
   for (const pos of positions) {
     const p = pos.Product || pos.product || {};
     const lots = pos.positionLot || pos.PositionLot || [];
+    const expiryYear = p.expiryYear;
+    const expiryMonth = p.expiryMonth;
+    const expiryDay = p.expiryDay;
     if (lots.length > 0) {
       for (const lot of lots) {
         gains.push({
@@ -139,6 +142,7 @@ async function getGains(accountIdKey) {
           securityType: p.securityType,
           callPut: p.callPut,
           strikePrice: p.strikePrice,
+          expiryYear, expiryMonth, expiryDay,
           description: pos.symbolDescription,
           dateAcquired: lot.acquiredDate,
           quantity: lot.remainingQty ?? pos.quantity,
@@ -156,6 +160,7 @@ async function getGains(accountIdKey) {
         securityType: p.securityType,
         callPut: p.callPut,
         strikePrice: p.strikePrice,
+        expiryYear, expiryMonth, expiryDay,
         description: pos.symbolDescription,
         dateAcquired: pos.dateAcquired,
         quantity: pos.quantity,
@@ -282,9 +287,7 @@ async function getTransactionDetail(accountIdKey, transactionId) {
 async function getTransactions(accountIdKey, { count = 50, startDate, endDate, maxPages = 0 } = {}) {
   accountIdKey = resolveAccountIdKey(accountIdKey) || accountIdKey;
   if (!startDate) {
-    const d = new Date();
-    d.setDate(d.getDate() - 30);
-    startDate = `${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}${d.getFullYear()}`;
+    startDate = `0101${new Date().getFullYear()}`;
   }
   const sd = normalizeDate(startDate);
   const ed = normalizeDate(endDate);
@@ -300,8 +303,11 @@ async function getTransactions(accountIdKey, { count = 50, startDate, endDate, m
       const result = data.TransactionListResponse || data;
       const txns = result?.Transaction || result?.transaction || [];
       if (Array.isArray(txns)) allTransactions = allTransactions.concat(txns);
-      if (!result.moreTransactions) break;
-      marker = result.marker;
+      const hasMore = result.moreTransactions || result.next || (txns.length >= count);
+      const nextMarker = result.marker || (result.next && new URL(result.next).searchParams.get('marker'));
+      console.log(`[transactions] page=${page} count=${txns.length} total=${allTransactions.length} moreTransactions=${result.moreTransactions} hasMore=${hasMore} marker=${nextMarker}`);
+      if (!hasMore) break;
+      marker = nextMarker;
       if (!marker) break;
     }
     return {

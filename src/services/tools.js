@@ -1,7 +1,7 @@
 import { Readability } from '@mozilla/readability';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
-import { mkdir, writeFile, readFile, readdir, stat, unlink } from 'fs/promises';
+import { mkdir, writeFile, readFile, readdir, stat, unlink, appendFile } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -11,6 +11,29 @@ import etrade from './etrade.js';
 
 const __dirname = import.meta.dirname || (() => { const f = fileURLToPath(import.meta.url); return f.substring(0, f.lastIndexOf('/')); })();
 const DATA_DIR = resolve(__dirname, '../../data');
+const LOG_DIR = resolve(__dirname, '../../logs');
+
+// ── Tool call logger ────────────────────────────────
+async function logToolCall(toolName, action, { args, rawResult, formattedResult }) {
+  try {
+    await mkdir(LOG_DIR, { recursive: true });
+    const now = new Date();
+    const ts = now.toISOString();
+    const logFile = join(LOG_DIR, `tools_${now.toISOString().split('T')[0]}.log`);
+    const entry = {
+      timestamp: ts,
+      tool: toolName,
+      action,
+      args,
+      raw: rawResult,
+      formatted: formattedResult,
+    };
+    const line = `\n${'═'.repeat(80)}\n[${ts}] ${toolName}:${action}\n${'─'.repeat(80)}\nARGS: ${JSON.stringify(args)}\n─── RAW ───\n${JSON.stringify(rawResult, null, 2)}\n─── FORMATTED (to LLM) ───\n${JSON.stringify(formattedResult, null, 2)}\n`;
+    await appendFile(logFile, line, 'utf-8');
+  } catch (err) {
+    console.warn(`[logToolCall] failed: ${err.message}`);
+  }
+}
 const PYTHON_VENV = (config.python.venvPath || '').replace(/^~/, homedir());
 
 // ── File save helper ─────────────────────────────────
@@ -22,6 +45,16 @@ async function saveToFile(filename, content) {
   await writeFile(filePath, content, 'utf-8');
   return { url: `/files/${encodeURIComponent(safe)}`, filename: safe, size: Buffer.byteLength(content, 'utf-8') };
 }
+
+// ── Shared helpers ───────────────────────────────────
+function formatExpiry(p) {
+  if (!p.expiryYear) return '';
+  const yr = Number(p.expiryYear);
+  const fullYear = yr < 100 ? 2000 + yr : yr;
+  return `${fullYear}-${String(p.expiryMonth).padStart(2, '0')}-${String(p.expiryDay).padStart(2, '0')}`;
+}
+// E*TRADE returns strikePrice:0 for equities — treat 0 as empty
+function formatStrike(v) { return v != null && v !== 0 ? v : ''; }
 
 // ── CSV helpers ──────────────────────────────────────
 function csvEscape(v) {
@@ -40,8 +73,8 @@ function transactionsToCsv(data) {
     const b = t.brokerage || {};
     const p = b.product || {};
     const date = new Date(t.transactionDate).toISOString().split('T')[0];
-    const expiry = p.expiryYear ? `20${String(p.expiryYear).padStart(2, '0')}-${String(p.expiryMonth).padStart(2, '0')}-${String(p.expiryDay).padStart(2, '0')}` : '';
-    return [date, t.transactionId, t.transactionType, p.symbol || '', p.securityType || '', p.callPut || '', p.strikePrice ?? '', expiry, b.quantity ?? '', b.price ?? '', t.amount ?? '', b.fee ?? '', t.description?.trim() || ''];
+    const expiry = formatExpiry(p);
+    return [date, t.transactionId, t.transactionType, p.symbol || '', p.securityType || '', p.callPut || '', formatStrike(p.strikePrice), expiry, b.quantity ?? '', b.price ?? '', t.amount ?? '', b.fee ?? '', t.description?.trim() || ''];
   });
   return toCsv(headers, rows);
 }
@@ -53,10 +86,10 @@ function portfolioToCsv(data) {
   const rows = positions.map(pos => {
     const p = pos.Product || pos.product || {};
     const q = pos.Quick || pos.quick || {};
-    const expiry = p.expiryYear ? `20${String(p.expiryYear).padStart(2, '0')}-${String(p.expiryMonth).padStart(2, '0')}-${String(p.expiryDay).padStart(2, '0')}` : '';
+    const expiry = formatExpiry(p);
     return [
       p.symbol || pos.symbolDescription || '', pos.symbolDescription || '', p.securityType || '',
-      p.callPut || '', p.strikePrice ?? '', expiry,
+      p.callPut || '', formatStrike(p.strikePrice), expiry,
       pos.quantity ?? '', pos.pricePaid ?? '', pos.marketValue ?? '',
       pos.totalCost ?? '', pos.totalGain ?? '', pos.totalGainPct ?? '',
       q.lastTrade ?? pos.Quick?.lastTrade ?? '',
@@ -112,8 +145,8 @@ function transactionsToMd(data) {
   const rows = txns.map(t => {
     const b = t.brokerage || {}; const p = b.product || {};
     const date = new Date(t.transactionDate).toISOString().split('T')[0];
-    const expiry = p.expiryYear ? `20${String(p.expiryYear).padStart(2, '0')}-${String(p.expiryMonth).padStart(2, '0')}-${String(p.expiryDay).padStart(2, '0')}` : '';
-    return [date, t.transactionType, p.symbol || '', p.callPut || '', p.strikePrice ?? '', expiry, b.quantity ?? '', b.price ?? '', t.amount ?? '', b.fee ?? ''];
+    const expiry = formatExpiry(p);
+    return [date, t.transactionType, p.symbol || '', p.callPut || '', formatStrike(p.strikePrice), expiry, b.quantity ?? '', b.price ?? '', t.amount ?? '', b.fee ?? ''];
   });
   const range = `${data.queryStartDate || '?'} to ${data.queryEndDate || 'today'}`;
   return toMd(`Transactions (${txns.length}) — queried ${range}`, headers, rows);
@@ -122,11 +155,11 @@ function transactionsToMd(data) {
 function portfolioToMd(data) {
   const positions = data?.AccountPortfolio?.[0]?.Position || [];
   if (!positions.length) return '';
-  const headers = ['Symbol', 'Type', 'C/P', 'Strike', 'Expiry', 'Qty', 'Price Paid', 'Market Value', 'Total Gain', 'Gain %'];
+  const headers = ['Symbol', 'Description', 'Type', 'C/P', 'Strike', 'Expiry', 'Qty', 'Price/Share', 'Total Cost', 'Market Value', 'Total Gain', 'Gain %'];
   const rows = positions.map(pos => {
     const p = pos.Product || pos.product || {};
-    const expiry = p.expiryYear ? `20${String(p.expiryYear).padStart(2, '0')}-${String(p.expiryMonth).padStart(2, '0')}-${String(p.expiryDay).padStart(2, '0')}` : '';
-    return [p.symbol || '', p.securityType || '', p.callPut || '', p.strikePrice ?? '', expiry, pos.quantity ?? '', pos.pricePaid ?? '', pos.marketValue ?? '', pos.totalGain ?? '', pos.totalGainPct ?? ''];
+    const expiry = formatExpiry(p);
+    return [p.symbol || '', pos.symbolDescription || '', p.securityType || '', p.callPut || '', formatStrike(p.strikePrice), expiry, pos.quantity ?? '', pos.pricePaid ?? '', pos.totalCost ?? '', pos.marketValue ?? '', pos.totalGain ?? '', pos.totalGainPct ?? ''];
   });
   return toMd(`Portfolio (${positions.length} positions)`, headers, rows);
 }
@@ -156,11 +189,11 @@ function accountsToMd(data) {
 
 function gainsToCsv(data) {
   const rows = (data.gains || []).map(g => [
-    g.symbol, g.securityType, g.callPut || '', g.strikePrice ?? '',
+    g.symbol, g.securityType, g.callPut || '', formatStrike(g.strikePrice), formatExpiry(g),
     g.description, g.dateAcquired ?? '', g.quantity, g.costPerShare,
     g.totalCost, g.marketValue, g.gain, g.gainPct, g.term,
   ]);
-  return toCsv(['Symbol', 'Type', 'C/P', 'Strike', 'Description', 'Date Acquired', 'Quantity', 'Cost/Share', 'Total Cost', 'Market Value', 'Gain', 'Gain %', 'Term'], rows);
+  return toCsv(['Symbol', 'Type', 'C/P', 'Strike', 'Expiry', 'Description', 'Date Acquired', 'Quantity', 'Cost/Share', 'Total Cost', 'Market Value', 'Gain', 'Gain %', 'Term'], rows);
 }
 
 function quotesToCsv(data) {
@@ -201,6 +234,10 @@ function quotesToMd(data) {
 function optionChainsToCsv(data) {
   const pairs = data.OptionPair || [];
   if (!pairs.length) return '';
+  // Fallback expiry from response-level fields (when individual options lack expiryDate)
+  const fallbackExpiry = [data._queryExpiryYear, data._queryExpiryMonth, data._queryExpiryDay].every(Boolean)
+    ? `${data._queryExpiryYear}-${String(data._queryExpiryMonth).padStart(2, '0')}-${String(data._queryExpiryDay).padStart(2, '0')}`
+    : '';
   const headers = ['Type', 'Symbol', 'Strike', 'Expiry', 'Bid', 'Ask', 'Last', 'Volume', 'Open Interest', 'IV', 'Delta', 'Gamma', 'Theta', 'Vega', 'Rho', 'Theo Value', 'In The Money'];
   const rows = [];
   for (const pair of pairs) {
@@ -209,7 +246,7 @@ function optionChainsToCsv(data) {
       if (!opt) continue;
       const greeks = opt.OptionGreeks || {};
       rows.push([
-        type, opt.symbol || '', opt.strikePrice ?? '', opt.expiryDate || '',
+        type, opt.symbol || '', opt.strikePrice ?? '', opt.expiryDate || fallbackExpiry,
         opt.bid ?? '', opt.ask ?? '', opt.lastPrice ?? '', opt.volume ?? '',
         opt.openInterest ?? '', greeks.iv ?? '',
         greeks.delta ?? '', greeks.gamma ?? '',
@@ -224,6 +261,9 @@ function optionChainsToCsv(data) {
 function optionChainsToMd(data) {
   const pairs = data.OptionPair || [];
   if (!pairs.length) return '';
+  const fallbackExpiry = [data._queryExpiryYear, data._queryExpiryMonth, data._queryExpiryDay].every(Boolean)
+    ? `${data._queryExpiryYear}-${String(data._queryExpiryMonth).padStart(2, '0')}-${String(data._queryExpiryDay).padStart(2, '0')}`
+    : '';
   const headers = ['Type', 'Strike', 'Expiry', 'Bid', 'Ask', 'Last', 'Vol', 'OI', 'IV', 'Delta', 'Theta', 'ITM'];
   const rows = [];
   for (const pair of pairs) {
@@ -232,7 +272,7 @@ function optionChainsToMd(data) {
       if (!opt) continue;
       const greeks = opt.OptionGreeks || {};
       rows.push([
-        type, opt.strikePrice ?? '', opt.expiryDate || '',
+        type, opt.strikePrice ?? '', opt.expiryDate || fallbackExpiry,
         opt.bid ?? '', opt.ask ?? '', opt.lastPrice ?? '', opt.volume ?? '',
         opt.openInterest ?? '', greeks.iv ?? '',
         greeks.delta ?? '', greeks.theta ?? '', opt.inTheMoney ?? '',
@@ -366,8 +406,8 @@ function transactionDetailToMd(data) {
   if (p.symbol) rows.push(['Symbol', p.symbol]);
   if (p.securityType) rows.push(['Security Type', p.securityType]);
   if (p.callPut) rows.push(['Call/Put', p.callPut]);
-  if (p.strikePrice != null) rows.push(['Strike', p.strikePrice]);
-  if (p.expiryYear) rows.push(['Expiry', `20${String(p.expiryYear).padStart(2, '0')}-${String(p.expiryMonth).padStart(2, '0')}-${String(p.expiryDay).padStart(2, '0')}`]);
+  if (p.strikePrice != null && p.strikePrice !== 0) rows.push(['Strike', p.strikePrice]);
+  if (p.expiryYear) rows.push(['Expiry', formatExpiry(p)]);
   if (b.quantity != null) rows.push(['Quantity', b.quantity]);
   if (b.price != null) rows.push(['Price', b.price]);
   if (b.fee != null) rows.push(['Fee', b.fee]);
@@ -382,19 +422,19 @@ function transactionDetailToCsv(data) {
   const b = t.brokerage || {};
   const p = b.product || {};
   const date = t.transactionDate ? new Date(t.transactionDate).toISOString().split('T')[0] : '';
-  const expiry = p.expiryYear ? `20${String(p.expiryYear).padStart(2, '0')}-${String(p.expiryMonth).padStart(2, '0')}-${String(p.expiryDay).padStart(2, '0')}` : '';
+  const expiry = formatExpiry(p);
   const headers = ['Transaction ID', 'Date', 'Type', 'Symbol', 'Security Type', 'Call/Put', 'Strike', 'Expiry', 'Quantity', 'Price', 'Amount', 'Fee', 'Description'];
-  const row = [t.transactionId ?? '', date, t.transactionType || '', p.symbol || '', p.securityType || '', p.callPut || '', p.strikePrice ?? '', expiry, b.quantity ?? '', b.price ?? '', t.amount ?? '', b.fee ?? '', t.description?.trim() || ''];
+  const row = [t.transactionId ?? '', date, t.transactionType || '', p.symbol || '', p.securityType || '', p.callPut || '', formatStrike(p.strikePrice), expiry, b.quantity ?? '', b.price ?? '', t.amount ?? '', b.fee ?? '', t.description?.trim() || ''];
   return toCsv(headers, [row]);
 }
 
 function gainsToMd(data) {
   const rows = (data.gains || []).map(g => [
-    g.symbol, g.callPut || '', g.strikePrice ?? '', g.dateAcquired ?? '',
-    g.quantity, g.totalCost, g.marketValue, g.gain, g.gainPct, g.term,
+    g.symbol, g.description || '', g.callPut || '', formatStrike(g.strikePrice), formatExpiry(g),
+    g.dateAcquired ?? '', g.quantity, g.costPerShare, g.totalCost, g.marketValue, g.gain, g.gainPct, g.term,
   ]);
   return toMd(`Unrealized Gains (${data.totalCount} lots)`,
-    ['Symbol', 'C/P', 'Strike', 'Acquired', 'Qty', 'Cost', 'Value', 'Gain', 'Gain %', 'Term'], rows);
+    ['Symbol', 'Description', 'C/P', 'Strike', 'Expiry', 'Acquired', 'Qty', 'Price/Share', 'Total Cost', 'Value', 'Gain', 'Gain %', 'Term'], rows);
 }
 
 // ── Search engine backends ───────────────────────────
@@ -677,10 +717,16 @@ const tools = {
     description: 'Retrieve E*TRADE brokerage and market data. Requires an "action" argument.\n\n**Account actions** (require "accountIdKey" — encoded string key from "list" action, NOT numeric accountId):\n- "list": list accounts\n- "balance": account balance\n- "portfolio": positions/holdings\n- "transactions": transaction history (auto-paginates to fetch ALL matching transactions within the date range; **defaults to Jan 1 of current year** if no startDate given; use startDate/endDate in MMDDYYYY to query other periods; ALWAYS pass startDate explicitly when the user specifies a date range — never ask the user to confirm, just do it; maxPages to limit pagination — 0=unlimited which is the default)\n- "gains": unrealized gains with lot-level cost basis and short/long term\n- "orders": order history (optional status: OPEN/EXECUTED/CANCELLED/etc, fromDate/toDate in MMDDYYYY, count max 100)\n- "transaction_detail": single transaction detail (requires transactionId)\n\n**Market data actions** (no accountIdKey needed):\n- "quote": real-time quotes (requires "symbols" — comma-separated, up to 25; optional detailFlag: ALL/FUNDAMENTAL/INTRADAY/OPTIONS/WEEK_52)\n- "optionchains": option chains with full Greeks (Delta, Gamma, Theta, Vega, Rho, IV) and bid/ask/volume/OI (requires "symbol"; optional expiryYear/expiryMonth/expiryDay, strikePriceNear, noOfStrikes, chainType: CALL/PUT/CALLPUT, includeWeekly)\n- "optionexpiry": option expiration dates (requires "symbol")\n- "lookup": product/symbol lookup (requires "search" — company name or partial symbol)\n\n**User alerts:**\n- "alerts": account/stock alerts (optional count 1-300, category: STOCK/ACCOUNT, status: READ/UNREAD)\n- "alert_detail": single alert detail (requires alertId)\n\nTo export data, add "saveAs" with a filename (.csv/.md/.json). Usage guide: "gains" for open positions with cost basis; "transactions" for trade history; "orders" for order status/fills; "quote" for current prices; "optionchains" for available options with Greeks (Delta, Theta, IV, etc.).',
     parameters: { action: 'string', accountIdKey: 'string (optional)', startDate: 'string (optional)', endDate: 'string (optional)', count: 'number (optional)', maxPages: 'number (optional, transactions only — 0=unlimited, default 0)', saveAs: 'string (optional)', symbols: 'string (optional)', symbol: 'string (optional)', detailFlag: 'string (optional)', expiryYear: 'string (optional)', expiryMonth: 'string (optional)', expiryDay: 'string (optional)', strikePriceNear: 'string (optional)', noOfStrikes: 'string (optional)', chainType: 'string (optional)', includeWeekly: 'boolean (optional)', search: 'string (optional)', status: 'string (optional)', fromDate: 'string (optional)', toDate: 'string (optional)', category: 'string (optional)', transactionId: 'string (optional)', alertId: 'string (optional)' },
     execute: async ({ action, accountIdKey, startDate, endDate, count, maxPages, saveAs, symbols, symbol, detailFlag, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly, search, status, fromDate, toDate, category, transactionId, alertId }) => {
+      const _logArgs = { action, accountIdKey, startDate, endDate, count, maxPages, saveAs, symbols, symbol, detailFlag, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly, search, status, fromDate, toDate, category, transactionId, alertId };
+      // Strip undefined args for cleaner logs
+      for (const k of Object.keys(_logArgs)) { if (_logArgs[k] === undefined) delete _logArgs[k]; }
+      const _log = (raw, formatted) => logToolCall('etrade_account', action, { args: _logArgs, rawResult: raw, formattedResult: formatted });
+
       if (!etrade.isAuthenticated()) {
         return { error: 'E*TRADE not authenticated. Click "E*TRADE (connect)" in the status bar to authenticate.' };
       }
       let result;
+      try {
       switch (action) {
         case 'list':
           result = await etrade.listAccounts();
@@ -709,6 +755,10 @@ const tools = {
         case 'optionchains':
           if (!symbol) return { error: 'symbol required.' };
           result = await etrade.getOptionChains({ symbol, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly });
+          // Attach query expiry so formatters can fill empty per-option expiryDate
+          if (expiryYear) result._queryExpiryYear = expiryYear;
+          if (expiryMonth) result._queryExpiryMonth = expiryMonth;
+          if (expiryDay) result._queryExpiryDay = expiryDay;
           break;
         case 'optionexpiry':
           if (!symbol) return { error: 'symbol required.' };
@@ -737,6 +787,11 @@ const tools = {
           break;
         default:
           return { error: `Unknown action: ${action}. Use: list, balance, portfolio, transactions, gains, quote, optionchains, optionexpiry, lookup, orders, alerts, alert_detail, transaction_detail` };
+      }
+      } catch (apiErr) {
+        const errResult = { error: `${action} failed: ${apiErr.message}` };
+        await _log(null, errResult);
+        return errResult;
       }
       const formatters = {
         transactions: transactionsToCsv, portfolio: portfolioToCsv, list: accountsToCsv,
@@ -783,18 +838,21 @@ const tools = {
         }
         if (!content) return { ...result, saveError: 'No data to save' };
         const file = await saveToFile(saveAs, content);
-        return { ...summarize(action, result), savedFile: file };
+        const out = { ...summarize(action, result), savedFile: file };
+        await _log(result, out);
+        return out;
       }
       // For large result sets, auto-save to CSV and return summary + truncated preview
       const ROW_THRESHOLD = 30;
-      const rowCount = result.Transaction?.length || result.AccountPortfolio?.[0]?.Position?.length || result.gains?.length || result.Order?.length || 0;
+      const optionPairCount = result.OptionPair?.length || 0;
+      const rowCount = result.Transaction?.length || result.AccountPortfolio?.[0]?.Position?.length || result.gains?.length || result.Order?.length || (optionPairCount * 2) || result.quotes?.length || result.Alert?.length || 0;
       if (rowCount > ROW_THRESHOLD && formatters[action]) {
         const autoFile = `${action}_${Date.now()}.csv`;
         const csvContent = formatters[action](result);
         if (csvContent) {
           const file = await saveToFile(autoFile, csvContent);
           const mdFormatter = mdFormatters[action];
-          // Build a truncated copy for the preview (first 15 rows)
+          // Build a truncated copy for the preview (first 15 items)
           const truncated = { ...result };
           if (truncated.Transaction) truncated.Transaction = truncated.Transaction.slice(0, 15);
           if (truncated.Order) truncated.Order = truncated.Order.slice(0, 15);
@@ -802,22 +860,32 @@ const tools = {
           if (truncated.AccountPortfolio?.[0]?.Position) {
             truncated.AccountPortfolio = [{ ...truncated.AccountPortfolio[0], Position: truncated.AccountPortfolio[0].Position.slice(0, 15) }];
           }
+          if (truncated.OptionPair) truncated.OptionPair = truncated.OptionPair.slice(0, 8);
+          if (truncated.quotes) truncated.quotes = truncated.quotes.slice(0, 15);
+          if (truncated.Alert) truncated.Alert = truncated.Alert.slice(0, 15);
           const preview = mdFormatter ? mdFormatter(truncated) : null;
-          return {
+          const out = {
             ...summarize(action, result),
             savedFile: file,
             _autoSaved: true,
             _note: `${rowCount} rows — auto-saved full data to ${autoFile}. Preview shows first 15 rows.`,
             ...(preview ? { _markdown: preview } : {}),
           };
+          await _log(result, out);
+          return out;
         }
       }
       // Return pre-formatted markdown table + lightweight summary (no raw data)
       const mdFormatter = mdFormatters[action];
       if (mdFormatter && result && !result.error) {
         const table = mdFormatter(result);
-        if (table) return { _markdown: table, ...summarize(action, result) };
+        if (table) {
+          const out = { _markdown: table, ...summarize(action, result) };
+          await _log(result, out);
+          return out;
+        }
       }
+      await _log(result, result);
       return result;
     },
   },
@@ -933,8 +1001,11 @@ Tool rules:
 ## FINANCIAL DATA INTEGRITY (applies to ALL E*TRADE / financial data)
 - NEVER interpret, reformat, summarize, round, abbreviate, recalculate, or manually transcribe financial data. E*TRADE tool results are authoritative — present them EXACTLY as returned, or save them to a file and let Python do the analysis. Dropping digits, misplacing decimals, or rounding dollar amounts is a serious error (e.g. $92,891.35 must stay $92,891.35 — never $924.83, $92,891, or $92.9K).
 - NEVER fabricate, interpolate, or invent financial figures. Only present values that appear verbatim in tool results. If a field or row doesn't exist in the data, don't create it.
+- NEVER question or editorialize about live market data based on your training data. Stock prices change — if E*TRADE shows a stock at $400, that IS the price. Do not say "this seems unusually high" or "typically trades lower" based on stale training knowledge. Your training data prices are outdated; live data is ground truth.
+- OPTIONS REASONING: Apply correct options logic. IV (implied volatility) reflects the market's expected move, NOT moneyness. High IV on an OTM option means the market expects a large move or is pricing event risk — it does NOT mean IV is high "because" the option is far OTM. OTM options with no catalyst typically have LOWER IV. Get the causality right: distance from strike is a reason to question why IV is elevated, never an explanation for it.
+- NEVER substitute training-data knowledge for missing live data. If a tool call didn't return the data you need (e.g. IV, Greeks, a specific field), RETRY the tool with correct parameters or tell the user what's missing. NEVER say "the tool didn't return X, but here's what typically happens" — that's fabrication disguised as education. Either fetch real data or say you couldn't get it.
 - For ANY calculation on financial data (sums, averages, filtering, grouping, date math, comparisons of more than 2-3 values) — ALWAYS save the data to a file first (using saveAs), then use run_python to process it. Never do mental math or manual arithmetic on financial figures.
-- When etrade_account returns a "_markdown" table, the UI renders it directly for the user. Do NOT repeat the table — instead, provide insights or answer the user's question. Use the pre-formatted table as your data source; do not recompute or omit rows.
+- When etrade_account returns a "_markdown" table, DO NOT repeat or echo the table in your response. The user can see the data in the collapsible tool result. Instead, provide insights, answer the question, or highlight key findings. When the result is auto-saved (you see "_autoSaved"), use run_python with the saved CSV file for any analysis. The preview only shows the first 15 rows — the FULL dataset is in the CSV. NEVER claim data is missing or unavailable when it was auto-saved. If the preview doesn't show the rows you need, that means you MUST use run_python to read the CSV — the data IS there.
 - ANALYSIS WORKFLOW: When the user asks to retrieve data AND perform calculations (e.g. "get transactions and calculate net income"), ALWAYS combine both steps into ONE etrade_account call with saveAs, then ONE run_python call. NEVER fetch data without saveAs when analysis is needed — the correct sequence is: (1) etrade_account with saveAs to get real data into a file, (2) run_python to read that file and compute results. This avoids dumping large tables on screen and ensures Python works with real data.
 - Large result sets (30+ rows) are auto-saved to CSV. When you see "_autoSaved" in the result, the full data is already in the saved file — use that filename in your run_python script. Do NOT re-fetch the data.
 
@@ -956,8 +1027,9 @@ Tool rules:
 - You are a LOCAL assistant running on the user's machine. You have real shell access via the run_command tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use run_command. NEVER say you cannot run commands or don't have access to the user's system.
 - After web_search, ALWAYS use web_fetch on the most relevant result URL to get full details before answering. Search snippets alone are not sufficient.
 - For ANY question about stock quotes, option chains, option Greeks, option expiration dates, or symbol lookup — ALWAYS use etrade_account (actions: quote, optionchains, optionexpiry, lookup) instead of web_search. These return real-time market data directly from E*TRADE. Only fall back to web_search if E*TRADE is not authenticated.
-- Options analysis workflow: (1) get current price with "quote", (2) get available expirations with "optionexpiry", (3) pick the expiry closest to the user's target DTE, (4) fetch the chain with "optionchains" using that expiry + strikePriceNear set to current price. NEVER guess prices, expiration dates, or Greeks — always fetch real data first.
+- Options analysis workflow: (1) get current price with "quote" + available expirations with "optionexpiry" in parallel (ONE round), (2) immediately fetch "optionchains" — do NOT re-fetch quote or expiry dates you already have. For multi-expiry analysis (IV surface, term structure), fetch up to 3 chains in parallel in ONE round, each with saveAs (e.g. saveAs: "MU_chain_apr17.csv"). Use strikePriceNear + noOfStrikes to limit each chain to ~20 strikes near ATM — do NOT fetch full chains for multi-expiry analysis as the combined data will be too large. You have limited tool rounds — NEVER waste rounds repeating calls you already made. (3) In the NEXT round (not the same round!), use run_python on the saved CSVs. NEVER mix optionchains + run_python in the same round — run_python executes in parallel and the files won't exist yet. NEVER guess prices, expiration dates, or Greeks — always fetch real data first.
 - CRITICAL: Only present strike prices, premiums, and Greeks that appear EXACTLY in the tool results. NEVER interpolate, extrapolate, or invent strikes between the ones returned. If the chain shows strikes at 420 and 430, do NOT fabricate a 425 strike. Present only real data rows from the tool output.
+- RANKING/FILTERING option chains: When the user asks for "most popular", "highest volume", "top N by OI", or any ranking/filtering of options — you MUST fetch the FULL chain (do NOT use noOfStrikes to limit). The full chain will auto-save to CSV. Then use run_python to sort/filter the CSV and find the answer. You cannot determine "most popular" from a subset — you need all strikes to compare. Example: fetch full chain with saveAs → run_python to sort by Open Interest or Volume → present top N results.
 - When analyzing options positions from etrade_account, ALWAYS use the current date/time (provided above) to calculate days-to-expiry. Never estimate or guess expiration dates — compute them from the portfolio data. Verify your time-to-expiry math before reporting. Common covered call strategies use ~30-day income-generating calls, not imminent expirations — frame your analysis accordingly.
 
 ## Response Formatting
@@ -997,9 +1069,19 @@ function unescapeJsonString(s) {
 
 // Try to repair malformed JSON in tool calls (common with run_python code containing newlines/quotes)
 function repairToolCallJson(raw) {
-  const nameMatch = raw.match(/"name"\s*:\s*"([^"]+)"/);
+  // Pre-fix: add missing opening quotes around string values (e.g. "name":etrade_account" → "name":"etrade_account")
+  const quoteFixed = raw.replace(/:(\s*)([a-zA-Z_][a-zA-Z0-9_]*)"/g, ':$1"$2"');
+  const nameMatch = quoteFixed.match(/"name"\s*:\s*"([^"]+)"/);
   if (!nameMatch) return null;
   const name = nameMatch[1];
+  // If quote-fix produced valid JSON, use it directly
+  try {
+    const parsed = JSON.parse(quoteFixed);
+    if (parsed.name) {
+      console.log(`[parseToolCalls] repaired JSON by fixing missing quotes for tool "${name}"`);
+      return { name: parsed.name, arguments: parsed.arguments || {} };
+    }
+  } catch { /* continue to other repair attempts */ }
 
   // Attempt 1: escape literal newlines/tabs/carriage-returns, then parse
   try {
@@ -1040,13 +1122,15 @@ export function parseToolCalls(text) {
   // Primary: extract all <tool_call> blocks
   for (const match of text.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g)) {
     const raw = match[1];
+    // Normalize Python-style literals to JSON (True→true, False→false, None→null)
+    const normalized = raw.replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null');
     try {
-      const parsed = JSON.parse(raw);
+      const parsed = JSON.parse(normalized);
       if (parsed.name) calls.push({ name: parsed.name, arguments: parsed.arguments || {} });
     } catch (e) {
       // JSON parse failed — attempt repair (common with run_python code containing newlines)
       console.warn(`[parseToolCalls] JSON.parse failed: ${e.message}`);
-      const repaired = repairToolCallJson(raw);
+      const repaired = repairToolCallJson(normalized);
       if (repaired) {
         calls.push(repaired);
       } else {

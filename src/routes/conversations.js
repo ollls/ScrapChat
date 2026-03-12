@@ -152,11 +152,14 @@ router.post('/:id/messages', async (req, res) => {
 
     const MAX_TOOL_ROUNDS = 5;
     const MAX_SAME_TOOL_REPEATS = 2;
+    const MAX_PARALLEL_TOOLS = 4;
     let finalContent = '';
     let lastUsage = null;
     let accumulatedReasoning = '';
     const toolUses = [];
     const toolCallCounts = {}; // track per-tool call counts
+    // Workflow state tracker — tracks what data has been acquired across rounds
+    const acquired = { quote: false, expiry: false, chains: [], portfolio: false, savedFiles: [] };
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // Stream content as tool_content so user sees progress during generation
@@ -184,6 +187,11 @@ router.post('/:id/messages', async (req, res) => {
           continue;
         }
 
+        // Cap parallel tool calls to prevent context blowup from massive combined results
+        if (toolCallsFound.length > MAX_PARALLEL_TOOLS) {
+          console.warn(`[tool-loop] round ${round + 1}: capping ${toolCallsFound.length} tool calls to ${MAX_PARALLEL_TOOLS} (dropped: ${toolCallsFound.slice(MAX_PARALLEL_TOOLS).map(tc => tc.name).join(', ')})`);
+          toolCallsFound.length = MAX_PARALLEL_TOOLS;
+        }
         // Execute all tool calls in parallel
         const toolNames = toolCallsFound.map(tc => tc.name).join(', ');
         console.log(`[tool-loop] round ${round + 1}: executing ${toolCallsFound.length} tool(s): ${toolNames}`);
@@ -202,23 +210,87 @@ router.post('/:id/messages', async (req, res) => {
         for (let i = 0; i < toolCallsFound.length; i++) {
           toolUses.push({ name: toolCallsFound[i].name, result: results[i] });
           res.write(`data: ${JSON.stringify({ tool_use: { name: toolCallsFound[i].name, result: results[i] } })}\n\n`);
-          // If result has _markdown, send the markdown table to LLM (clean, structured data)
+          // Send clean data to LLM: compact summaries to minimize context bloat
           let llmResult = results[i];
           try {
             const parsed = JSON.parse(results[i]);
-            if (parsed._markdown) {
+            if (parsed._autoSaved && parsed.savedFile) {
+              // Large result auto-saved — send only summary + filename (no preview table)
               const { _markdown, ...summary } = parsed;
-              llmResult = _markdown + (Object.keys(summary).length ? '\n\n' + JSON.stringify(summary) : '');
+              llmResult = JSON.stringify(summary);
+            } else if (parsed._markdown) {
+              const { _markdown, ...summary } = parsed;
+              // Truncate markdown tables to reduce context: keep header + first 10 data rows
+              const mdLines = _markdown.split('\n');
+              let truncatedMd = _markdown;
+              const dataRowStart = mdLines.findIndex(l => l.startsWith('|')) + 2; // skip header + separator
+              if (dataRowStart > 1) {
+                const dataRows = mdLines.slice(dataRowStart).filter(l => l.startsWith('|'));
+                if (dataRows.length > 10) {
+                  truncatedMd = mdLines.slice(0, dataRowStart + 10).join('\n') + `\n... (${dataRows.length - 10} more rows)`;
+                }
+              }
+              llmResult = truncatedMd + (Object.keys(summary).length ? '\n\n' + JSON.stringify(summary) : '');
             }
           } catch {}
           resultParts.push(`Tool "${toolCallsFound[i].name}" result: ${llmResult}`);
         }
         llmMessages.push({ role: 'assistant', content: result.content });
-        llmMessages.push({ role: 'user', content: resultParts.join('\n\n') });
+        const roundsLeft = MAX_TOOL_ROUNDS - round - 1;
+
+        // Update workflow state based on what tools just ran
+        for (const tc of toolCallsFound) {
+          const action = tc.arguments?.action;
+          if (action === 'quote') acquired.quote = true;
+          if (action === 'optionexpiry') acquired.expiry = true;
+          if (action === 'portfolio') acquired.portfolio = true;
+          if (action === 'optionchains') {
+            const expLabel = [tc.arguments?.expiryYear, tc.arguments?.expiryMonth, tc.arguments?.expiryDay].filter(Boolean).join('-') || 'default';
+            acquired.chains.push(expLabel);
+          }
+        }
+        // Track saved files from results
+        for (const r of results) {
+          try {
+            const p = JSON.parse(r);
+            if (p.savedFile?.filename) acquired.savedFiles.push(p.savedFile.filename);
+          } catch {}
+        }
+
+        // Build workflow-aware directive: full state + next step
+        const stateLines = [];
+        if (acquired.quote) stateLines.push('quote ✓');
+        if (acquired.expiry) stateLines.push('optionexpiry ✓');
+        if (acquired.chains.length) stateLines.push(`optionchains ✓ (${acquired.chains.join(', ')})`);
+        if (acquired.portfolio) stateLines.push('portfolio ✓');
+        if (acquired.savedFiles.length) stateLines.push(`saved files: ${acquired.savedFiles.join(', ')}`);
+
+        let directive = '';
+        if (acquired.chains.length > 0 && acquired.savedFiles.length > 0) {
+          directive = `Data is ready. Use run_python to read ${acquired.savedFiles.join(' and ')} and perform your analysis. Do NOT fetch more data unless specifically needed.`;
+        } else if (acquired.chains.length > 0) {
+          directive = 'Option chain data retrieved. If you need to analyze it, use run_python. If you need more expiries, call optionchains with saveAs.';
+        } else if (acquired.quote || acquired.expiry) {
+          directive = 'You have quote/expiry data. NOW call optionchains (with saveAs and strikePriceNear) for the expiries you need. Do NOT re-fetch quote or optionexpiry.';
+        }
+
+        const toolReminder = `\n\n[WORKFLOW STATE] Completed: ${stateLines.join(', ') || 'none'}. Rounds left: ${roundsLeft}.\n${directive}\nREMINDER: tool calls MUST use <tool_call></tool_call> tags.`;
+        llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + toolReminder });
       } else {
-        // Final answer — no tool call
+        // Final answer — no tool call found by parser
+        // Detect bare JSON or truncated tool calls and retry the round
+        if (/\{"name"\s*:\s*"/.test(result.content)) {
+          console.warn(`[tool-loop] response contains bare/truncated JSON tool call but parseToolCalls found nothing. Content (last 200 chars): ...${result.content.slice(-200)}`);
+          llmMessages.push({ role: 'assistant', content: result.content });
+          llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags or was truncated. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
+          continue;
+        }
         if (/<tool_call/i.test(result.content)) {
           console.warn(`[tool-loop] response contains <tool_call> tag but parseToolCalls found nothing. Content (first 500 chars):\n${result.content.slice(0, 500)}`);
+          // Malformed tool call — ask LLM to retry with valid JSON instead of treating as final answer
+          llmMessages.push({ role: 'assistant', content: result.content });
+          llmMessages.push({ role: 'user', content: 'Your <tool_call> JSON was malformed and could not be parsed. Please retry the tool call with valid JSON: {"name": "tool_name", "arguments": {...}}' });
+          continue;
         }
         finalContent = result.content;
         break;
