@@ -125,6 +125,8 @@ router.post('/:id/messages', async (req, res) => {
       let content = '';
       let usage = null;
       let suppressToolContent = false;
+      let toolContentBuffer = '';   // buffer tool_content until we know it's not a tool call
+      let toolContentFlushed = false; // true once buffer has been flushed (safe to stream directly)
 
       for await (const chunk of parseSSEChunks(response)) {
         const delta = chunk.choices?.[0]?.delta;
@@ -139,6 +141,18 @@ router.post('/:id/messages', async (req, res) => {
           if (isToolRound && !suppressToolContent) {
             if (/\{"name"\s*:/.test(content) || /<tool_call>/i.test(content)) {
               suppressToolContent = true;
+              toolContentBuffer = ''; // discard buffered content — it was part of the tool call
+            } else if (!toolContentFlushed) {
+              // Buffer content until we're confident it's not a tool call
+              toolContentBuffer += delta.content;
+              const trimmed = toolContentBuffer.trimStart();
+              // If buffered content starts with { or < it might be a tool call — keep buffering
+              // Once we have 30+ chars of non-JSON/non-tag text, flush and stream normally
+              if (trimmed.length > 30 && !/^\s*[{<]/.test(trimmed)) {
+                res.write(`data: ${JSON.stringify({ tool_content: toolContentBuffer })}\n\n`);
+                toolContentFlushed = true;
+                toolContentBuffer = '';
+              }
             } else {
               res.write(`data: ${JSON.stringify({ tool_content: delta.content })}\n\n`);
             }
@@ -153,17 +167,23 @@ router.post('/:id/messages', async (req, res) => {
         }
       }
 
+      // Flush any remaining buffered tool_content (short non-tool-call text)
+      if (isToolRound && !suppressToolContent && toolContentBuffer) {
+        res.write(`data: ${JSON.stringify({ tool_content: toolContentBuffer })}\n\n`);
+      }
+
       return { content, usage };
     }
 
-    const MAX_TOOL_ROUNDS = 7;
-    const MAX_SAME_TOOL_REPEATS = 2;
+    const MAX_TOOL_ROUNDS = 20;
+    const MAX_SAME_TOOL_REPEATS = 3;
     const MAX_PARALLEL_TOOLS = 4;
     let finalContent = '';
     let lastUsage = null;
     let accumulatedReasoning = '';
     const toolUses = [];
-    const toolCallCounts = {}; // track per-tool call counts
+    const toolCallCounts = {}; // track per-tool call counts (by name)
+    const toolCallSigs = new Set(); // track unique tool+args signatures for dedup
     let hadChainData = false;        // whether any optionchains call has completed
     let hadExpiryCall = false;       // whether optionexpiry was called (signals options analysis)
 
@@ -177,20 +197,58 @@ router.post('/:id/messages', async (req, res) => {
       if (result.usage) lastUsage = result.usage;
 
       const toolCallsFound = parseToolCalls(result.content);
+      if (toolCallsFound.length === 0 && /\{"name"\s*:/.test(result.content)) {
+        console.warn(`[tool-loop] round ${round + 1}: parseToolCalls returned empty but content has {"name":. Content length: ${result.content.length}. First 500 chars:\n${result.content.slice(0, 500)}\n...Last 200 chars:\n${result.content.slice(-200)}`);
+      }
       if (toolCallsFound.length > 0) {
         // Check for repeated same-tool calls (prevents retry loops)
+        // Count by unique signature (name+args) so distinct queries (e.g. different expiries) don't trigger the limit
         for (const tc of toolCallsFound) {
-          toolCallCounts[tc.name] = (toolCallCounts[tc.name] || 0) + 1;
+          const sig = tc.name + ':' + JSON.stringify(tc.arguments || {});
+          if (toolCallSigs.has(sig)) {
+            // Exact duplicate call — count against the repeat limit
+            toolCallCounts[tc.name] = (toolCallCounts[tc.name] || 0) + 1;
+          } else {
+            toolCallSigs.add(sig);
+          }
         }
         const overLimit = toolCallsFound.filter(tc => toolCallCounts[tc.name] > MAX_SAME_TOOL_REPEATS);
         if (overLimit.length > 0) {
-          console.warn(`[tool-loop] tool "${overLimit[0].name}" called ${toolCallCounts[overLimit[0].name]} times, breaking retry loop`);
+          const overName = overLimit[0].name;
+          const overCount = toolCallCounts[overName];
+          console.warn(`[tool-loop] tool "${overName}" called ${overCount} times, forcing final answer`);
+          // Filter out over-limit tools; execute remaining tools if any
+          const allowedCalls = toolCallsFound.filter(tc => toolCallCounts[tc.name] <= MAX_SAME_TOOL_REPEATS);
+          if (allowedCalls.length > 0) {
+            console.log(`[tool-loop] executing ${allowedCalls.length} non-overlimit tool(s): ${allowedCalls.map(tc => tc.name).join(', ')}`);
+            const context = {
+              confirmFn: (command) => {
+                res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
+                return requestConfirmation(conv.id, command);
+              },
+            };
+            const results = await Promise.all(
+              allowedCalls.map(tc => executeTool(tc.name, tc.arguments, context))
+            );
+            for (let i = 0; i < allowedCalls.length; i++) {
+              toolUses.push({ name: allowedCalls[i].name, result: results[i] });
+              res.write(`data: ${JSON.stringify({ tool_use: { name: allowedCalls[i].name, result: results[i] } })}\n\n`);
+            }
+          }
           llmMessages.push({ role: 'assistant', content: result.content });
           llmMessages.push({
             role: 'user',
-            content: `Tool "${overLimit[0].name}" has been called ${toolCallCounts[overLimit[0].name]} times. Stop retrying and provide your best answer using the results you have so far. If there was an error, explain what went wrong.`,
+            content: `Tool "${overName}" has been called ${overCount} times and is now DISABLED. You MUST provide your final answer NOW using the results you have so far. Do NOT call any tools. If there was an error, explain what went wrong.`,
           });
-          continue;
+          // Give LLM ONE final chance to answer, then break regardless
+          const forceResult = await streamRound(llmMessages, { slotId, signal: abortController.signal }, true);
+          if (forceResult.usage) lastUsage = forceResult.usage;
+          // Strip any tool calls from this forced response
+          finalContent = forceResult.content
+            .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
+            .replace(/<think>[\s\S]*?<\/think>/g, '')
+            .trim();
+          break;
         }
 
         // Cap parallel tool calls to prevent context blowup from massive combined results
@@ -334,6 +392,57 @@ router.post('/:id/messages', async (req, res) => {
         if (final2.usage) lastUsage = final2.usage;
       } else {
         finalContent = forced.content;
+      }
+    }
+
+    // Safety net: if finalContent still looks like a bare tool call, try parsing and executing it
+    // This catches edge cases where the tool loop somehow failed to parse a valid tool call
+    if (finalContent && /\{"name"\s*:\s*"/.test(finalContent)) {
+      // Strip <think> blocks that might interfere with parsing
+      const stripped = finalContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      const safetyCalls = parseToolCalls(stripped);
+      if (safetyCalls.length > 0) {
+        console.warn(`[safety-net] finalContent contains unparsed tool call(s): ${safetyCalls.map(c => c.name).join(', ')} — executing`);
+        const context = {
+          confirmFn: (command) => {
+            res.write(`data: ${JSON.stringify({ confirm_command: { command } })}\n\n`);
+            return requestConfirmation(conv.id, command);
+          },
+        };
+        const results = await Promise.all(
+          safetyCalls.map(tc => executeTool(tc.name, tc.arguments, context))
+        );
+        for (let i = 0; i < safetyCalls.length; i++) {
+          toolUses.push({ name: safetyCalls[i].name, result: results[i] });
+          res.write(`data: ${JSON.stringify({ tool_use: { name: safetyCalls[i].name, result: results[i] } })}\n\n`);
+        }
+        // One more round for the actual answer — with a timeout to prevent hanging
+        llmMessages.push({ role: 'assistant', content: finalContent });
+        const resultParts = safetyCalls.map((tc, i) => `Tool "${tc.name}" result: ${results[i]}`);
+        llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + '\n\nNow provide your final answer based on the tool results above. Do NOT call any more tools — this is your LAST chance to respond.' });
+        try {
+          const safetyAbort = AbortController ? new AbortController() : abortController;
+          const safetyTimeout = setTimeout(() => safetyAbort.abort(), 60000);
+          const safetyRound = await streamRound(llmMessages, { slotId, signal: safetyAbort.signal }, true);
+          clearTimeout(safetyTimeout);
+          finalContent = safetyRound.content;
+          if (safetyRound.usage) lastUsage = safetyRound.usage;
+        } catch (e) {
+          console.warn(`[safety-net] streamRound failed/timed out: ${e.message}`);
+          // Use tool results as final content since the LLM won't answer
+          finalContent = resultParts.join('\n\n');
+        }
+      }
+    }
+
+    // Strip tool call artifacts from final content (tagged, bare JSON, and think blocks)
+    if (finalContent) {
+      finalContent = finalContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      finalContent = finalContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+      // Strip bare JSON tool calls that are the ONLY content (not embedded in explanation)
+      if (/^\s*\{"name"\s*:/.test(finalContent) && finalContent.replace(/\s/g, '').endsWith('}}')) {
+        console.warn(`[safety-net] finalContent is bare JSON tool call, stripping`);
+        finalContent = '';
       }
     }
 

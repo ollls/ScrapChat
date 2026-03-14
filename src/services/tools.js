@@ -826,14 +826,32 @@ const tools = {
         switch (act) {
           case 'list': return { totalCount: res.totalCount ?? res.accounts?.length ?? 0 };
           case 'balance': return { accountId: (res.accountId || ''), accountType: (res.accountType || '') };
-          case 'portfolio': return { totalPositions: res.totalPositions ?? res.AccountPortfolio?.[0]?.Position?.length ?? 0 };
-          case 'transactions': return { totalCount: res.totalCount ?? 0, pagesFetched: res.pagesFetched ?? 1, queryStartDate: res.queryStartDate, queryEndDate: res.queryEndDate };
+          case 'portfolio': {
+            const positions = res.AccountPortfolio?.[0]?.Position || [];
+            const symbols = [...new Set(positions.map(p => p.Product?.symbol).filter(Boolean))];
+            return { totalPositions: res.totalPositions ?? positions.length, uniqueSymbols: symbols };
+          }
+          case 'transactions': {
+            const txns = res.Transaction || [];
+            const symbols = [...new Set(txns.map(t => t.brokerage?.product?.symbol || t.brokerage?.displaySymbol).filter(Boolean))];
+            const secTypes = [...new Set(txns.map(t => t.brokerage?.product?.securityType).filter(Boolean))];
+            const txnTypes = [...new Set(txns.map(t => t.transactionType).filter(Boolean))];
+            return {
+              totalCount: res.totalCount ?? 0, pagesFetched: res.pagesFetched ?? 1,
+              queryStartDate: res.queryStartDate, queryEndDate: res.queryEndDate,
+              uniqueSymbols: symbols, securityTypes: secTypes, transactionTypes: txnTypes,
+            };
+          }
           case 'gains': return { totalCount: res.totalCount ?? 0, totalGain: res.totalGain, totalGainPct: res.totalGainPct };
           case 'quote': return { totalCount: res.totalCount ?? res.quotes?.length ?? 0 };
           case 'optionchains': return { totalPairs: res.OptionPair?.length ?? 0 };
           case 'optionexpiry': return { totalCount: res.totalCount ?? res.expirationDates?.length ?? 0 };
           case 'lookup': return { totalCount: res.totalCount ?? res.products?.length ?? 0 };
-          case 'orders': return { totalCount: res.totalCount ?? res.Order?.length ?? 0 };
+          case 'orders': {
+            const orders = res.Order || [];
+            const symbols = [...new Set(orders.map(o => o.OrderDetail?.[0]?.Instrument?.[0]?.Product?.symbol).filter(Boolean))];
+            return { totalCount: res.totalCount ?? orders.length, uniqueSymbols: symbols };
+          }
           case 'alerts': return { totalCount: res.totalCount ?? res.Alert?.length ?? 0 };
           case 'alert_detail': return { alertId: res.id ?? '' };
           case 'transaction_detail': return { transactionId: res.transactionId ?? '' };
@@ -1052,6 +1070,22 @@ Tool rules:
     if len(open_s): print("\\nOPEN SHORTS (no cover):"); print(open_s[['Symbol','Call/Put','Strike','Expiry','ShortQty','Proceeds']].to_string(index=False))
     if len(open_c): print("\\nORPHAN COVERS (short in prior period):"); print(open_c[['Symbol','Call/Put','Strike','Expiry','CoverQty','CoverCost']].to_string(index=False))
     if len(expired): print("\\nEXPIRED:"); print(expired[['Symbol','Call/Put','Strike','Expiry']].to_string(index=False))
+- Option position status definitions (apply consistently):
+  - Closed: Short Qty = Cover Qty (fully realized)
+  - Over-covered: Cover Qty > Short Qty (still fully realized — calculate full P&L, do not skip)
+  - Open: Short Qty > 0 and Cover Qty = 0 (unrealized)
+  - Partial: 0 < Cover Qty < Short Qty (partially realized)
+  - Expired: Closed via "Option Expired" at $0 cover cost (full premium retained, fully realized)
+  - Orphan Cover: Cover Qty > 0 and Short Qty = 0 (short was in a prior period)
+- Option analysis summary table format — use this EXACT layout:
+  Symbol | Type | Strike | Expiry | Short Qty | Cover Qty | Status | Premium Received | Cover Cost | Fees | Net P&L
+  Every cell must have a dollar amount. Net P&L: +sign for gains, -sign for losses. Open positions: show UNREALIZED. Orphan Covers: show PRIOR PERIOD.
+  Footer rows:
+  REALIZED TOTAL — Closed + Expired + Over-covered groups only
+  OPEN EXPOSURE — Open + Partial groups only (UNREALIZED)
+  PRIOR PERIOD — Orphan Cover groups only (NOT INCLUDED in realized total)
+- Amount column sign rules: Sold Short amounts are POSITIVE (cash received), Bought To Cover amounts are NEGATIVE (cash paid). Use values as-is from the data — do NOT reverse signs. Net P&L = sum(Sold Short amounts) + sum(Bought To Cover amounts) - total fees.
+- CRITICAL FALLBACK: If run_python is unavailable or exhausted, perform arithmetic INLINE using the transaction data already in context. Do NOT cite disabled Python, script truncation, or tool limits as a reason to skip math. Summing premiums and subtracting cover costs is basic addition — it does not require code execution. A response missing dollar amounts is incomplete.
 - run_python error handling: If a script fails, DO NOT retry with the same approach. First run a small diagnostic script (e.g. print columns, print dtypes, print first row) to understand the data, then fix the actual issue. Maximum 1 retry after diagnosis.
 - WHEN TO USE run_python vs direct answer: USE run_python for: any calculation involving more than 3 numbers, aggregations (sum, avg, count, group-by), data with more than 10 rows, date math, filtering/sorting data, or any question where getting the wrong number would be harmful. ANSWER DIRECTLY for: single value lookups, qualitative questions, comparing 2-3 values, or explaining what data means. RULE OF THUMB: if you need to count, sum, or iterate — use Python. Never do mental math on financial data.
 - You are a LOCAL assistant running on the user's machine. You have real shell access via the run_command tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use run_command. NEVER say you cannot run commands or don't have access to the user's system.
@@ -1180,6 +1214,10 @@ function repairToolCallJson(raw) {
 
 export function parseToolCalls(text) {
   const calls = [];
+
+  // Strip <think> blocks — models sometimes include reasoning that contains
+  // JSON fragments resembling tool calls, which can confuse the fallback parser
+  text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
 
   // Pre-normalize: fix = used instead of : in tool call JSON
   // Pattern 1: "name=tool_name" as a single token → "name": "tool_name"
