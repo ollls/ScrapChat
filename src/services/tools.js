@@ -658,11 +658,13 @@ const tools = {
       console.log(`[run_python] confirmation ${approved ? 'approved' : 'denied'} (${elapsed()})`);
       if (!approved) return { denied: true, message: 'User denied Python execution.' };
 
-      // Auto-fix JS-style booleans/null → Python in keyword args (common LLM mistake)
-      // Only fix `param=true/false/null` patterns (keyword arguments), not bare usage
+      // Auto-fix JS-style booleans/null → Python (common LLM mistake)
+      // Pass 1: keyword args (na=false → na=False, inplace=true → inplace=True)
       code = code.replace(/(\w\s*=\s*)true\b/g, '$1True')
                  .replace(/(\w\s*=\s*)false\b/g, '$1False')
                  .replace(/(\w\s*=\s*)null\b/g, '$1None');
+      // Pass 2: standalone null → None (null is never valid Python, always means None)
+      code = code.replace(/\bnull\b/g, 'None');
 
       await mkdir(DATA_DIR, { recursive: true });
       const tmpFile = join(DATA_DIR, '.tmp_script.py');
@@ -1029,19 +1031,27 @@ Tool rules:
 - run_python output strategy: For quick calculations, just print(). For reports, tables, or analysis results — ALWAYS save to a file (CSV for data, MD for formatted reports, HTML for rich reports, PNG for charts) AND print a short summary. The tool auto-detects created files and returns download URLs. Never dump large tables to stdout — save them to a file instead.
 - run_python data workflow: When the user asks for a CALCULATION, write the calculation script DIRECTLY — do NOT waste rounds on diagnostic scripts (list_files, file_read, print columns) unless the calculation script fails. You already know the column names from the tool results and CSV format. Transaction CSV columns: Date, Transaction ID, Type, Symbol, Security Type, Call/Put, Strike, Expiry, Quantity, Price, Amount, Fee, Description. Portfolio CSV columns: Symbol, Description, Security Type, Call/Put, Strike, Expiry, Quantity, Price Paid, Market Value, Total Cost, Total Gain, Total Gain Pct. If etrade_account auto-saved a file (you see "_autoSaved" and "savedFile"), use that filename directly. Only run a diagnostic script (print columns, head) AFTER a calculation script fails — never as a first step. NEVER do mental arithmetic on financial data — if the user asked for a calculation, you MUST produce the answer from a Python script, not from eyeballing data.
 - run_python code quality — MANDATORY rules:
-  1. NEVER use iterrows(), itertuples(), or for-loops over DataFrame rows. Use ONLY vectorized pandas: df.groupby(), df[condition]['Amount'].sum(), df.loc[], etc.
+  1. FORBIDDEN: iterrows(), itertuples(), for-loops over DataFrame rows, iloc[0] inside loops. Use ONLY vectorized pandas: groupby().agg(), merge(), df[condition]['col'].sum(). Any script using iterrows WILL FAIL.
   2. Keep scripts under 40 lines. One task per script.
   3. Pick ONE output: print() a short summary OR save a file. Not both.
   4. Before submitting: mentally verify every string literal, bracket, quote, and f-string brace. A syntax error wastes an entire tool round.
   Example of CORRECT transaction analysis: df = pd.read_csv('file.csv'); by_type = df.groupby('Type')['Amount'].sum(); fees = df['Fee'].sum(); print(by_type.to_string()); print(f"Total fees: {fees:.2f}")
-  Example of CORRECT option pair matching (vectorized, NOT iterrows):
+  Example of CORRECT option pair matching (vectorized, NOT iterrows) — USE THIS EXACT PATTERN:
     df = pd.read_csv('file.csv')
     opts = df[df['Security Type'].str.contains('OPTN|Option', na=False)]
+    expired = opts[opts['Type']=='Option Expired']
     shorts = opts[opts['Type']=='Sold Short'].groupby(['Symbol','Call/Put','Strike','Expiry']).agg(Proceeds=('Amount','sum'), ShortFee=('Fee','sum'), ShortQty=('Quantity','sum')).reset_index()
     covers = opts[opts['Type']=='Bought To Cover'].groupby(['Symbol','Call/Put','Strike','Expiry']).agg(CoverCost=('Amount','sum'), CoverFee=('Fee','sum'), CoverQty=('Quantity','sum')).reset_index()
-    matched = shorts.merge(covers, on=['Symbol','Call/Put','Strike','Expiry'], how='inner')
-    matched['Gain'] = matched['Proceeds'] + matched['CoverCost'] - matched['ShortFee'] - matched['CoverFee']
-    print(matched.to_string(index=False)); print(f"\\nTotal: \${matched['Gain'].sum():,.2f}")
+    m = shorts.merge(covers, on=['Symbol','Call/Put','Strike','Expiry'], how='outer', indicator=True)
+    closed = m[m['_merge']=='both'].copy()
+    closed['Gain'] = closed['Proceeds'] + closed['CoverCost'] - closed['ShortFee'] - closed['CoverFee']
+    open_s = m[m['_merge']=='left_only']
+    open_c = m[m['_merge']=='right_only']
+    print("CLOSED PAIRS:"); print(closed[['Symbol','Call/Put','Strike','Expiry','ShortQty','Proceeds','CoverQty','CoverCost','Gain']].to_string(index=False))
+    print(f"\\nTotal P&L: \${closed['Gain'].sum():,.2f}")
+    if len(open_s): print("\\nOPEN SHORTS (no cover):"); print(open_s[['Symbol','Call/Put','Strike','Expiry','ShortQty','Proceeds']].to_string(index=False))
+    if len(open_c): print("\\nORPHAN COVERS (short in prior period):"); print(open_c[['Symbol','Call/Put','Strike','Expiry','CoverQty','CoverCost']].to_string(index=False))
+    if len(expired): print("\\nEXPIRED:"); print(expired[['Symbol','Call/Put','Strike','Expiry']].to_string(index=False))
 - run_python error handling: If a script fails, DO NOT retry with the same approach. First run a small diagnostic script (e.g. print columns, print dtypes, print first row) to understand the data, then fix the actual issue. Maximum 1 retry after diagnosis.
 - WHEN TO USE run_python vs direct answer: USE run_python for: any calculation involving more than 3 numbers, aggregations (sum, avg, count, group-by), data with more than 10 rows, date math, filtering/sorting data, or any question where getting the wrong number would be harmful. ANSWER DIRECTLY for: single value lookups, qualitative questions, comparing 2-3 values, or explaining what data means. RULE OF THUMB: if you need to count, sum, or iterate — use Python. Never do mental math on financial data.
 - You are a LOCAL assistant running on the user's machine. You have real shell access via the run_command tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use run_command. NEVER say you cannot run commands or don't have access to the user's system.
