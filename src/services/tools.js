@@ -598,9 +598,14 @@ const tools = {
       const filePath = join(DATA_DIR, safe);
       try {
         let content = await readFile(filePath, 'utf-8');
-        const totalLines = content.split('\n').length;
+        const lines = content.split('\n');
+        const totalLines = lines.length;
         if (head && head > 0) {
-          content = content.split('\n').slice(0, head).join('\n');
+          content = lines.slice(0, head).join('\n');
+        } else if (safe.endsWith('.csv') && totalLines > 10) {
+          // For CSV files, show header + 5 rows — use run_python to process the full data
+          content = lines.slice(0, 6).join('\n');
+          content += `\n... (${totalLines - 6} more rows)\n[Use run_python with pd.read_csv('${safe}') to process this data. Do NOT attempt to analyze it by reading — use Python.]`;
         }
         if (content.length > 10000) content = content.slice(0, 10000) + '\n...[truncated]';
         return { filename: safe, totalLines, content };
@@ -652,6 +657,12 @@ const tools = {
       const approved = await context.confirmFn(`Python script:\n${code}`);
       console.log(`[run_python] confirmation ${approved ? 'approved' : 'denied'} (${elapsed()})`);
       if (!approved) return { denied: true, message: 'User denied Python execution.' };
+
+      // Auto-fix JS-style booleans/null → Python in keyword args (common LLM mistake)
+      // Only fix `param=true/false/null` patterns (keyword arguments), not bare usage
+      code = code.replace(/(\w\s*=\s*)true\b/g, '$1True')
+                 .replace(/(\w\s*=\s*)false\b/g, '$1False')
+                 .replace(/(\w\s*=\s*)null\b/g, '$1None');
 
       await mkdir(DATA_DIR, { recursive: true });
       const tmpFile = join(DATA_DIR, '.tmp_script.py');
@@ -1016,13 +1027,21 @@ Tool rules:
 - To read file contents (CSVs, text files, downloaded data) — use file_read. Use head parameter for large files.
 - To run Python scripts for data analysis, calculations, or CSV processing — use run_python. Scripts run in the data directory and can read/write files there directly. ONLY use run_python to process data that already exists in files — never to fetch or fabricate data.
 - run_python output strategy: For quick calculations, just print(). For reports, tables, or analysis results — ALWAYS save to a file (CSV for data, MD for formatted reports, HTML for rich reports, PNG for charts) AND print a short summary. The tool auto-detects created files and returns download URLs. Never dump large tables to stdout — save them to a file instead.
-- run_python data workflow: ALWAYS use list_files first to check what data files exist. Then use file_read with head=5 to inspect column names and data format BEFORE writing the processing script. NEVER guess column names — verify them first. NEVER copy-paste or hardcode file contents into the script — read them with pandas or open(). Exception: if etrade_account just auto-saved a file (you see "_autoSaved" and "savedFile" in the result), skip list_files/file_read — you already know the filename and columns from the markdown preview. USE THOSE EXACT COLUMN NAMES from the CSV (not the markdown preview which uses abbreviated names). Transaction CSV columns: Date, Transaction ID, Type, Symbol, Security Type, Call/Put, Strike, Expiry, Quantity, Price, Amount, Fee, Description. Portfolio CSV columns: Symbol, Description, Security Type, Call/Put, Strike, Expiry, Quantity, Price Paid, Market Value, Total Cost, Total Gain, Total Gain Pct. When in doubt, start your script with: df = pd.read_csv('file.csv'); print(df.columns.tolist()).
+- run_python data workflow: When the user asks for a CALCULATION, write the calculation script DIRECTLY — do NOT waste rounds on diagnostic scripts (list_files, file_read, print columns) unless the calculation script fails. You already know the column names from the tool results and CSV format. Transaction CSV columns: Date, Transaction ID, Type, Symbol, Security Type, Call/Put, Strike, Expiry, Quantity, Price, Amount, Fee, Description. Portfolio CSV columns: Symbol, Description, Security Type, Call/Put, Strike, Expiry, Quantity, Price Paid, Market Value, Total Cost, Total Gain, Total Gain Pct. If etrade_account auto-saved a file (you see "_autoSaved" and "savedFile"), use that filename directly. Only run a diagnostic script (print columns, head) AFTER a calculation script fails — never as a first step. NEVER do mental arithmetic on financial data — if the user asked for a calculation, you MUST produce the answer from a Python script, not from eyeballing data.
 - run_python code quality — MANDATORY rules:
   1. NEVER use iterrows(), itertuples(), or for-loops over DataFrame rows. Use ONLY vectorized pandas: df.groupby(), df[condition]['Amount'].sum(), df.loc[], etc.
   2. Keep scripts under 40 lines. One task per script.
   3. Pick ONE output: print() a short summary OR save a file. Not both.
   4. Before submitting: mentally verify every string literal, bracket, quote, and f-string brace. A syntax error wastes an entire tool round.
   Example of CORRECT transaction analysis: df = pd.read_csv('file.csv'); by_type = df.groupby('Type')['Amount'].sum(); fees = df['Fee'].sum(); print(by_type.to_string()); print(f"Total fees: {fees:.2f}")
+  Example of CORRECT option pair matching (vectorized, NOT iterrows):
+    df = pd.read_csv('file.csv')
+    opts = df[df['Security Type'].str.contains('OPTN|Option', na=False)]
+    shorts = opts[opts['Type']=='Sold Short'].groupby(['Symbol','Call/Put','Strike','Expiry']).agg(Proceeds=('Amount','sum'), ShortFee=('Fee','sum'), ShortQty=('Quantity','sum')).reset_index()
+    covers = opts[opts['Type']=='Bought To Cover'].groupby(['Symbol','Call/Put','Strike','Expiry']).agg(CoverCost=('Amount','sum'), CoverFee=('Fee','sum'), CoverQty=('Quantity','sum')).reset_index()
+    matched = shorts.merge(covers, on=['Symbol','Call/Put','Strike','Expiry'], how='inner')
+    matched['Gain'] = matched['Proceeds'] + matched['CoverCost'] - matched['ShortFee'] - matched['CoverFee']
+    print(matched.to_string(index=False)); print(f"\\nTotal: \${matched['Gain'].sum():,.2f}")
 - run_python error handling: If a script fails, DO NOT retry with the same approach. First run a small diagnostic script (e.g. print columns, print dtypes, print first row) to understand the data, then fix the actual issue. Maximum 1 retry after diagnosis.
 - WHEN TO USE run_python vs direct answer: USE run_python for: any calculation involving more than 3 numbers, aggregations (sum, avg, count, group-by), data with more than 10 rows, date math, filtering/sorting data, or any question where getting the wrong number would be harmful. ANSWER DIRECTLY for: single value lookups, qualitative questions, comparing 2-3 values, or explaining what data means. RULE OF THUMB: if you need to count, sum, or iterate — use Python. Never do mental math on financial data.
 - You are a LOCAL assistant running on the user's machine. You have real shell access via the run_command tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use run_command. NEVER say you cannot run commands or don't have access to the user's system.
@@ -1118,10 +1137,26 @@ function repairToolCallJson(raw) {
     const argMatch = raw.match(pattern);
     if (argMatch) {
       const start = argMatch.index + argMatch[0].length;
-      // Walk backwards from end past closing braces/whitespace to find the closing quote
-      let end = raw.length - 1;
-      while (end > start && /[\s}]/.test(raw[end])) end--;
-      if (raw[end] === '"') {
+      // Find the closing quote: walk forward, skip escaped chars, handle literal newlines
+      let end = -1;
+      for (let j = start; j < raw.length; j++) {
+        const ch = raw[j];
+        if (ch === '\\') { j++; continue; } // skip escaped char
+        // Literal newlines inside JSON string are invalid but common from LLMs — skip them
+        if (ch === '\n' || ch === '\r') continue;
+        if (ch === '"') {
+          // Check if this quote is followed by }} (end of arguments+outer object)
+          const after = raw.slice(j + 1).trimStart();
+          if (after.startsWith('}')) { end = j; break; }
+        }
+      }
+      // Fallback: walk backwards (handles cases where forward scan fails)
+      if (end === -1) {
+        end = raw.length - 1;
+        while (end > start && /[\s}]/.test(raw[end])) end--;
+        if (raw[end] !== '"') end = -1;
+      }
+      if (end > start) {
         const rawValue = raw.slice(start, end);
         const value = unescapeJsonString(rawValue);
         console.log(`[parseToolCalls] manually extracted "${argName}" (${value.length} chars) for tool "${name}"`);
