@@ -55,6 +55,7 @@ router.post('/:id/messages', async (req, res) => {
 
   const content = (req.body.content || '').trim();
   const images = req.body.images; // [{ mimeType, base64 }]
+  const applets = !!req.body.applets;
   if (!content && (!images || images.length === 0)) {
     return res.status(400).json({ error: 'Content is required' });
   }
@@ -89,9 +90,10 @@ router.post('/:id/messages', async (req, res) => {
 
   try {
     // Build messages with system prompt for tool support
-    const systemPrompt = getSystemPrompt();
+    const systemPrompt = getSystemPrompt({ applets });
 
     // Convert stored messages to OpenAI format (handle vision + structured assistant content)
+    const appletRe = /<applet\s+type="([^"]*)"[^>]*>[\s\S]*?<\/applet>/gi;
     const historyMessages = conv.messages.slice(0, -1).map(msg => {
       if (msg.role === 'user' && typeof msg.content === 'object' && msg.content.images) {
         const parts = [];
@@ -106,8 +108,11 @@ router.post('/:id/messages', async (req, res) => {
         }
         return { role: 'user', content: parts };
       }
-      if (msg.role === 'assistant' && typeof msg.content === 'object' && msg.content.text) {
-        return { role: 'assistant', content: msg.content.text };
+      if (msg.role === 'assistant') {
+        const text = typeof msg.content === 'object' && msg.content.text
+          ? msg.content.text : typeof msg.content === 'string' ? msg.content : '';
+        const stripped = text.replace(appletRe, (_m, type) => `[Applet: ${type} visualization]`);
+        return { role: 'assistant', content: stripped };
       }
       return msg;
     });

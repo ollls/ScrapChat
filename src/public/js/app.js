@@ -6,6 +6,7 @@ const state = {
   healthy: false,
   maxContext: 131072,
   pendingImages: [], // { dataUrl, mimeType, name }
+  appletsEnabled: localStorage.getItem('appletsEnabled') !== 'false', // default true
 };
 
 // ── DOM refs ──────────────────────────────────────────
@@ -44,6 +45,7 @@ const etradePanelContent = document.getElementById('etrade-panel-content');
 const imageInput = document.getElementById('image-input');
 const attachBtn = document.getElementById('attach-btn');
 const imagePreviewStrip = document.getElementById('image-preview-strip');
+const appletToggle = document.getElementById('applet-toggle');
 const savePromptBtn = document.getElementById('save-prompt-btn');
 const clearPromptBtn = document.getElementById('clear-prompt-btn');
 const promptList = document.getElementById('prompt-list');
@@ -214,10 +216,104 @@ if (typeof mermaid !== 'undefined') {
 
 let _mermaidId = 0;
 
+// ── Applet extraction & rendering ─────────────────────
+const APPLET_RE = /<applet\s+type="([^"]*)"[^>]*>([\s\S]*?)<\/applet>/gi;
+const MAX_APPLET_SIZE = 50 * 1024; // 50KB
+
+function extractApplets(text) {
+  const applets = [];
+  const cleaned = text.replace(APPLET_RE, (_match, type, html) => {
+    const idx = applets.length;
+    applets.push({ type: type.toLowerCase(), html: html.trim() });
+    return `<div data-applet="${idx}"></div>`;
+  });
+  return { cleaned, applets };
+}
+
+function createAppletIframe(applet) {
+  let html = applet.html;
+
+  // Validate: must contain <script>, <svg>, or <canvas>
+  if (!/<script[\s>]|<svg[\s>]|<canvas[\s>]/i.test(html)) {
+    // Fallback: collapsible code block
+    const details = document.createElement('details');
+    details.className = 'applet-fallback';
+    details.innerHTML = `<summary style="cursor:pointer;color:#a1a1aa;font-size:0.8125rem;margin:0.5rem 0">Applet (${applet.type}) — click to view source</summary><pre style="background:#18181b;border:1px solid #3f3f46;border-radius:0.5rem;padding:1rem;overflow-x:auto;font-size:0.8125rem;color:#e4e4e7"><code></code></pre>`;
+    details.querySelector('code').textContent = html;
+    return details;
+  }
+
+  // Size cap
+  if (html.length > MAX_APPLET_SIZE) {
+    const div = document.createElement('div');
+    div.style.cssText = 'color:#ef4444;font-size:0.8125rem;padding:0.5rem';
+    div.textContent = `Applet too large (${(html.length / 1024).toFixed(1)}KB > 50KB limit)`;
+    return div;
+  }
+
+  // Inject Chart.js for chartjs type if missing
+  if (applet.type === 'chartjs' && !html.includes('/lib/chart.min.js')) {
+    html = html.replace(/<head>/i, '<head>\n<script src="/lib/chart.min.js"><\/script>');
+    // If no <head> tag, prepend
+    if (!/<head>/i.test(html)) {
+      html = `<head><script src="/lib/chart.min.js"><\/script></head>\n${html}`;
+    }
+  }
+
+  // Inject auto-resize script if no postMessage present
+  if (!html.includes('postMessage')) {
+    const resizeScript = `<script>
+new ResizeObserver(() => {
+  window.parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*');
+}).observe(document.body);
+window.addEventListener('load', () => {
+  window.parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*');
+});
+<\/script>`;
+    html = html.replace(/<\/body>/i, resizeScript + '</body>');
+    if (!/<\/body>/i.test(html)) html += resizeScript;
+  }
+
+  const iframe = document.createElement('iframe');
+  iframe.className = 'applet-iframe';
+  iframe.sandbox = 'allow-scripts';
+  iframe.srcdoc = html;
+  iframe.style.cssText = 'width:100%;height:500px;border:none;border-radius:0.5rem;overflow:hidden;display:block';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'applet-wrapper';
+  wrapper.appendChild(iframe);
+  return wrapper;
+}
+
+// Global resize listener for applet iframes (registered once)
+window.addEventListener('message', (e) => {
+  if (!e.data || e.data.type !== 'resize' || typeof e.data.height !== 'number') return;
+  const height = Math.max(100, Math.min(2000, e.data.height));
+  document.querySelectorAll('.applet-iframe').forEach(iframe => {
+    if (iframe.contentWindow === e.source) {
+      iframe.style.height = height + 'px';
+    }
+  });
+});
+
 function renderFormattedContent(text, container, { renderMermaid = false } = {}) {
-  const raw = marked.parse(text);
+  // Extract applets BEFORE DOMPurify (which strips <applet> tags)
+  const { cleaned, applets } = extractApplets(text);
+
+  const raw = marked.parse(cleaned);
   container.innerHTML = DOMPurify.sanitize(raw);
   container.classList.add('markdown-body');
+
+  // Replace placeholders with applet iframes
+  if (applets.length > 0) {
+    applets.forEach((applet, idx) => {
+      const placeholder = container.querySelector(`[data-applet="${idx}"]`);
+      if (placeholder) {
+        placeholder.replaceWith(createAppletIframe(applet));
+      }
+    });
+  }
 
   if (renderMermaid && typeof mermaid !== 'undefined') {
     container.querySelectorAll('code.language-mermaid').forEach(async (codeEl) => {
@@ -491,6 +587,7 @@ async function sendMessage(content, images) {
       body: JSON.stringify({
         content,
         images: images ? images.map(i => ({ mimeType: i.mimeType, base64: i.base64 })) : undefined,
+        applets: state.appletsEnabled,
       }),
       signal: state.abortController.signal,
     });
@@ -1187,6 +1284,13 @@ function clearPendingImages() {
 }
 
 attachBtn.addEventListener('click', () => imageInput.click());
+
+// Applet toggle
+appletToggle.checked = state.appletsEnabled;
+appletToggle.addEventListener('change', () => {
+  state.appletsEnabled = appletToggle.checked;
+  localStorage.setItem('appletsEnabled', state.appletsEnabled);
+});
 
 imageInput.addEventListener('change', () => {
   for (const file of imageInput.files) {

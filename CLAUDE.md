@@ -32,8 +32,9 @@ src/
     etrade.js              # E*TRADE OAuth 1.0a client + API wrapper
     liteapi.js             # LiteAPI hotel/travel client
   views/index.html         # Main chat UI (sidebar, status bar, slot panel)
-  public/js/app.js         # Client-side: conversations, streaming, slots, images, prompts UI
+  public/js/app.js         # Client-side: conversations, streaming, slots, images, applets, prompts UI
   public/css/              # Tailwind input/output
+  public/lib/chart.min.js  # Chart.js v4 static bundle (served at /lib/chart.min.js)
 data/                      # Runtime data dir: saved files, prompts.json (served at /files/)
 logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 ```
@@ -112,6 +113,26 @@ Safety mechanisms:
 
 Tools are registered in `src/services/tools.js` — add new tools to the `tools` object with `description`, `parameters`, and `execute` function. Tools can be toggled on/off at runtime via `/api/tools/:name/toggle`.
 
+### Applet System
+Prompt-based interactive HTML visualizations rendered in sandboxed iframes within assistant chat bubbles. Not a tool — the LLM emits `<applet type="TYPE">` blocks in its final response content.
+
+**Types**: `svg` (inline SVG), `chartjs` (Chart.js config-driven), `html` (plain HTML/CSS/JS)
+
+**Toggle**: Checkbox in input form next to attach button. State in `state.appletsEnabled`, persisted to localStorage (default: on). Sent as `applets: true|false` in message POST body. Backend conditionally injects applet prompt section into system prompt via `getSystemPrompt({ applets })`.
+
+**Frontend rendering** (app.js):
+- `extractApplets(text)` — regex-extracts `<applet>` blocks BEFORE DOMPurify (which strips deprecated `<applet>` tags), replaces with `<div data-applet="N">` placeholders that survive marked.parse + DOMPurify
+- `createAppletIframe(applet)` — builds sandboxed iframe (`sandbox="allow-scripts"`), auto-injects Chart.js for `type="chartjs"`, auto-injects ResizeObserver-based resize script, validates content (must contain `<script>`/`<svg>`/`<canvas>`), enforces 50KB cap, falls back to collapsible code block
+- `renderFormattedContent()` — calls extractApplets first, runs cleaned text through marked+DOMPurify, then replaces placeholders with iframes
+- Global `message` listener for iframe resize (100-2000px height cap)
+- Streaming safety: partial `<applet>` tags don't match regex (needs both open+close), render as text until final render
+
+**Context management** (conversations.js): Assistant messages in history have `<applet>...</applet>` blocks replaced with `[Applet: TYPE visualization]` before sending to LLM, preserving stored content for frontend re-rendering.
+
+**Chart.js**: Served as static file from `src/public/lib/chart.min.js` at `/lib/chart.min.js` — no CDN dependency.
+
+**Security**: `sandbox="allow-scripts"` without `allow-same-origin` = JS runs but fully isolated from parent DOM, cookies, localStorage. postMessage resize is the only parent communication channel.
+
 ## SSE Event Types
 The `/api/conversations/:id/messages` endpoint streams these SSE events:
 - `{reasoning}` — reasoning/thinking tokens (Qwen3 `reasoning_content`)
@@ -135,6 +156,7 @@ The `/api/conversations/:id/messages` endpoint streams these SSE events:
 - Conversations auto-titled from first user message text (truncated to 60 chars)
 - Prompts titled by LLM via separate non-streaming completion (handles Qwen3 think blocks)
 - Search engine switchable at runtime via POST `/api/health/search`
+- Applet HTML in assistant messages stripped from LLM history context (replaced with `[Applet: TYPE visualization]`), kept in stored messages for frontend re-rendering
 
 ## Conventions
 - ES modules (`import`/`export`) throughout

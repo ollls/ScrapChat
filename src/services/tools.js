@@ -1383,7 +1383,7 @@ export function setToolEnabled(name, enabled) {
 }
 
 // Build system prompt from registry
-export function getSystemPrompt() {
+export function getSystemPrompt({ applets = false } = {}) {
   const toolList = Object.entries(tools)
     .filter(([name]) => !disabledTools.has(name))
     .map(([name, t]) => `- ${name}: ${t.description}`)
@@ -1547,7 +1547,73 @@ Rules:
 - Use plain, direct language. No filler phrases or sycophantic openers.
 - Separate major topic shifts with a horizontal rule (---).
 
-## FINAL REMINDER
+${applets ? `## Applet Visualizations
+
+When the user requests a visualization, chart, diagram, or interactive widget:
+- Output a complete HTML document between <applet type="TYPE"> and </applet> tags
+- TYPE must be one of: svg, chartjs, html
+- The HTML must be self-contained — all CSS inline in <style>, all JS inline in <script>
+- Data goes in a const at the top of <script> — separate data from rendering logic
+- Dark theme: background #1a1a2e, text #e0e0e0, accent #4a9eff, secondary #7c3aed, success #10b981, warning #f59e0b, error #ef4444, surface #16213e, border #2a2a4a
+- Responsive: use percentage widths, min/max constraints
+- Max 50KB total HTML size
+- For resize: window.parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*')
+
+For type="svg" applets:
+- Use inline SVG directly in the HTML body
+- Use viewBox for scaling, no fixed pixel dimensions on the SVG element
+- Text: fill="#e0e0e0", font-family: system-ui
+- Lines/borders: stroke="#2a2a4a"
+- Shapes: fill with the accent palette above
+- For flowcharts: use rounded rects, arrows with markers, labels centered in shapes
+
+For type="chartjs" applets:
+- Chart.js is available at /lib/chart.min.js — include via <script src="/lib/chart.min.js"></script>
+- Create a <canvas id="chart"></canvas> in the body
+- Instantiate with: new Chart(document.getElementById('chart'), config)
+- Use dark theme defaults: grid color '#2a2a4a', tick color '#e0e0e0'
+- Plugin.legend.labels.color = '#e0e0e0'
+
+Example — complete working applet:
+<applet type="chartjs">
+<!DOCTYPE html>
+<html><head>
+<script src="/lib/chart.min.js"></script>
+<style>body { margin: 0; padding: 16px; background: #1a1a2e; }</style>
+</head><body>
+<canvas id="chart"></canvas>
+<script>
+const DATA = [
+  { label: 'AAPL', value: 42 },
+  { label: 'MSFT', value: 31 },
+  { label: 'GOOGL', value: 27 }
+];
+new Chart(document.getElementById('chart'), {
+  type: 'bar',
+  data: {
+    labels: DATA.map(d => d.label),
+    datasets: [{ label: 'Allocation %', data: DATA.map(d => d.value),
+      backgroundColor: '#4a9eff', borderColor: '#4a9eff', borderWidth: 1 }]
+  },
+  options: {
+    responsive: true,
+    scales: { y: { ticks: { color: '#e0e0e0' }, grid: { color: '#2a2a4a' } },
+              x: { ticks: { color: '#e0e0e0' }, grid: { color: '#2a2a4a' } } },
+    plugins: { legend: { labels: { color: '#e0e0e0' } } }
+  }
+});
+</script>
+</body></html>
+</applet>
+
+For type="html" applets:
+- Pure HTML/CSS/JS, no external libraries
+- Use CSS grid or flexbox for layouts
+- For tables: sticky headers, alternating row colors (#16213e / #1a1a2e), hover highlight #2a2a4a
+- For interactive controls: style inputs/selects/buttons with the dark palette
+- Canvas API is available for custom drawing and animation
+
+` : ''}## FINAL REMINDER
 All tool calls MUST use <tool_call></tool_call> tags. Bare JSON is silently ignored — the tool will NOT run.`;
 }
 
