@@ -6,6 +6,8 @@ const state = {
   healthy: false,
   maxContext: 131072,
   pendingImages: [], // { dataUrl, mimeType, name }
+  appletsEnabled: localStorage.getItem('appletsEnabled') !== 'false', // default true
+  autorunEnabled: localStorage.getItem('autorunEnabled') === 'true', // default false
 };
 
 // ── DOM refs ──────────────────────────────────────────
@@ -28,9 +30,32 @@ const inetDot = document.getElementById('inet-dot');
 const inetLabel = document.getElementById('inet-label');
 const searchDot = document.getElementById('search-dot');
 const searchLabel = document.getElementById('search-label');
+const searchToggle = document.getElementById('search-toggle');
+const searchDropdown = document.getElementById('search-dropdown');
+const toolUsageToggle = document.getElementById('tool-usage-toggle');
+const toolUsageCount = document.getElementById('tool-usage-count');
+const toolUsageDropdown = document.getElementById('tool-usage-dropdown');
+const liteapiStatus = document.getElementById('liteapi-status');
+const liteapiDot = document.getElementById('liteapi-dot');
+const liteapiLabel = document.getElementById('liteapi-label');
+const etradeStatus = document.getElementById('etrade-status');
+const etradeDot = document.getElementById('etrade-dot');
+const etradeToggle = document.getElementById('etrade-toggle');
+const etradePanel = document.getElementById('etrade-panel');
+const etradePanelContent = document.getElementById('etrade-panel-content');
 const imageInput = document.getElementById('image-input');
 const attachBtn = document.getElementById('attach-btn');
 const imagePreviewStrip = document.getElementById('image-preview-strip');
+const appletToggle = document.getElementById('applet-toggle');
+const autorunToggle = document.getElementById('autorun-toggle');
+const savePromptBtn = document.getElementById('save-prompt-btn');
+const clearPromptBtn = document.getElementById('clear-prompt-btn');
+const promptList = document.getElementById('prompt-list');
+const promptsToggle = document.getElementById('prompts-toggle');
+const promptsDropdown = document.getElementById('prompts-dropdown');
+const toolsToggle = document.getElementById('tools-toggle');
+const toolsDropdown = document.getElementById('tools-dropdown');
+const toolsList = document.getElementById('tools-list');
 
 // ── API layer ─────────────────────────────────────────
 const api = {
@@ -164,6 +189,7 @@ function showEmptyState() {
 // ── Markdown rendering ───────────────────────────────
 marked.setOptions({
   highlight: (code, lang) => {
+    if (lang === 'mermaid') return code; // don't highlight mermaid, render later
     if (typeof hljs === 'undefined') return code;
     if (lang && hljs.getLanguage(lang)) {
       try { return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value; } catch {}
@@ -175,10 +201,150 @@ marked.setOptions({
   gfm: true,
 });
 
-function renderFormattedContent(text, container) {
-  const raw = marked.parse(text);
+// Initialize Mermaid with dark theme
+if (typeof mermaid !== 'undefined') {
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'dark',
+    themeVariables: {
+      darkMode: true,
+      background: '#18181b',
+      primaryColor: '#6366f1',
+      primaryTextColor: '#e4e4e7',
+      lineColor: '#71717a',
+    },
+  });
+}
+
+let _mermaidId = 0;
+
+// ── Applet extraction & rendering ─────────────────────
+const APPLET_RE = /<applet\s+type="([^"]*)"[^>]*>([\s\S]*?)<\/applet>/gi;
+const MAX_APPLET_SIZE = 50 * 1024; // 50KB
+
+function extractApplets(text) {
+  const applets = [];
+  const cleaned = text.replace(APPLET_RE, (_match, type, html) => {
+    const idx = applets.length;
+    applets.push({ type: type.toLowerCase(), html: html.trim() });
+    return `<div data-applet="${idx}"></div>`;
+  });
+  return { cleaned, applets };
+}
+
+function createAppletIframe(applet) {
+  let html = applet.html;
+
+  // Validate: must contain <script>, <svg>, or <canvas>
+  if (!/<script[\s>]|<svg[\s>]|<canvas[\s>]/i.test(html)) {
+    // Fallback: collapsible code block
+    const details = document.createElement('details');
+    details.className = 'applet-fallback';
+    details.innerHTML = `<summary style="cursor:pointer;color:#a1a1aa;font-size:0.8125rem;margin:0.5rem 0">Applet (${applet.type}) — click to view source</summary><pre style="background:#18181b;border:1px solid #3f3f46;border-radius:0.5rem;padding:1rem;overflow-x:auto;font-size:0.8125rem;color:#e4e4e7"><code></code></pre>`;
+    details.querySelector('code').textContent = html;
+    return details;
+  }
+
+  // Size cap
+  if (html.length > MAX_APPLET_SIZE) {
+    const div = document.createElement('div');
+    div.style.cssText = 'color:#ef4444;font-size:0.8125rem;padding:0.5rem';
+    div.textContent = `Applet too large (${(html.length / 1024).toFixed(1)}KB > 50KB limit)`;
+    return div;
+  }
+
+  // Inject Chart.js for chartjs type if missing
+  if (applet.type === 'chartjs' && !html.includes('/lib/chart.min.js')) {
+    html = html.replace(/<head>/i, '<head>\n<script src="/lib/chart.min.js"><\/script>');
+    // If no <head> tag, prepend
+    if (!/<head>/i.test(html)) {
+      html = `<head><script src="/lib/chart.min.js"><\/script></head>\n${html}`;
+    }
+  }
+
+  // Inject auto-resize script if no postMessage present
+  if (!html.includes('postMessage')) {
+    const resizeScript = `<script>
+new ResizeObserver(() => {
+  window.parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*');
+}).observe(document.body);
+window.addEventListener('load', () => {
+  window.parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*');
+});
+<\/script>`;
+    html = html.replace(/<\/body>/i, resizeScript + '</body>');
+    if (!/<\/body>/i.test(html)) html += resizeScript;
+  }
+
+  const iframe = document.createElement('iframe');
+  iframe.className = 'applet-iframe';
+  iframe.sandbox = 'allow-scripts';
+  iframe.srcdoc = html;
+  iframe.style.cssText = 'width:100%;height:500px;border:none;border-radius:0.5rem;overflow:hidden;display:block';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'applet-wrapper';
+  wrapper.appendChild(iframe);
+  return wrapper;
+}
+
+// Global resize listener for applet iframes (registered once)
+window.addEventListener('message', (e) => {
+  if (!e.data || e.data.type !== 'resize' || typeof e.data.height !== 'number') return;
+  const height = Math.max(100, Math.min(2000, e.data.height));
+  document.querySelectorAll('.applet-iframe').forEach(iframe => {
+    if (iframe.contentWindow === e.source) {
+      iframe.style.height = height + 'px';
+    }
+  });
+});
+
+function renderFormattedContent(text, container, { renderMermaid = false } = {}) {
+  // Extract applets BEFORE DOMPurify (which strips <applet> tags)
+  const { cleaned, applets } = extractApplets(text);
+
+  const raw = marked.parse(cleaned);
   container.innerHTML = DOMPurify.sanitize(raw);
   container.classList.add('markdown-body');
+
+  // Replace placeholders with applet iframes
+  if (applets.length > 0) {
+    applets.forEach((applet, idx) => {
+      const placeholder = container.querySelector(`[data-applet="${idx}"]`);
+      if (placeholder) {
+        placeholder.replaceWith(createAppletIframe(applet));
+      }
+    });
+  }
+
+  if (renderMermaid && typeof mermaid !== 'undefined') {
+    container.querySelectorAll('code.language-mermaid').forEach(async (codeEl) => {
+      const pre = codeEl.parentElement;
+      let source = codeEl.textContent;
+      // Auto-convert pie charts with negative values to xychart-beta bar charts
+      if (/^\s*pie\b/i.test(source)) {
+        const entries = [...source.matchAll(/"([^"]+)"\s*:\s*([-\d.]+)/g)];
+        if (entries.some(m => parseFloat(m[2]) < 0)) {
+          const labels = entries.map(m => `"${m[1]}"`).join(', ');
+          const values = entries.map(m => m[2]).join(', ');
+          const titleMatch = source.match(/title\s+(.+)/i);
+          const title = titleMatch ? titleMatch[1].trim() : 'Chart';
+          source = `xychart-beta\n    title "${title}"\n    x-axis [${labels}]\n    bar [${values}]`;
+          codeEl.textContent = source;
+        }
+      }
+      const id = `mermaid-${++_mermaidId}`;
+      try {
+        const { svg } = await mermaid.render(id, source);
+        const div = document.createElement('div');
+        div.className = 'mermaid-chart';
+        div.innerHTML = svg;
+        pre.replaceWith(div);
+      } catch {
+        // leave as code block if mermaid fails to parse
+      }
+    });
+  }
 }
 
 let _renderTimer = null;
@@ -199,6 +365,43 @@ function scheduleRender(text, container) {
   }, RENDER_INTERVAL - (now - _lastRenderTime));
 }
 
+// ── Extract image URLs from tool results ──────────────
+const IMG_URL_RE = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp|svg|bmp)(?:\?\S*)?/gi;
+function extractImageUrls(obj, depth = 0) {
+  if (!obj || depth > 5) return [];
+  const urls = new Set();
+  if (typeof obj === 'string') {
+    for (const m of obj.matchAll(IMG_URL_RE)) urls.add(m[0]);
+  } else if (Array.isArray(obj)) {
+    for (const item of obj) {
+      for (const u of extractImageUrls(item, depth + 1)) urls.add(u);
+    }
+  } else if (typeof obj === 'object') {
+    for (const [key, val] of Object.entries(obj)) {
+      if (key.startsWith('_') && key !== '_images') continue; // skip _markdown etc. but keep _images
+      for (const u of extractImageUrls(val, depth + 1)) urls.add(u);
+    }
+  }
+  return [...urls];
+}
+
+// ── File download link helper ─────────────────────────
+function makeFileDownloadLink(toolName, resultStr) {
+  try {
+    const parsed = JSON.parse(resultStr);
+    // Direct save_file result or nested savedFile from other tools (e.g. etrade_account)
+    const fileInfo = toolName === 'save_file' ? parsed : parsed.savedFile;
+    if (!fileInfo?.url || !fileInfo?.filename) return null;
+    const sizeStr = fileInfo.size >= 1024 ? `${(fileInfo.size / 1024).toFixed(1)} KB` : `${fileInfo.size} bytes`;
+    const link = document.createElement('a');
+    link.href = fileInfo.url;
+    link.download = fileInfo.filename;
+    link.className = 'inline-flex items-center gap-1 mt-1 px-2 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded transition-colors';
+    link.innerHTML = `<span>📥</span> Download <strong>${fileInfo.filename}</strong> <span class="text-zinc-400">(${sizeStr})</span>`;
+    return link;
+  } catch { return null; }
+}
+
 // ── Messages ──────────────────────────────────────────
 function renderMessages(messages) {
   responseArea.innerHTML = '';
@@ -206,11 +409,13 @@ function renderMessages(messages) {
   for (const msg of messages) {
     const text = typeof msg.content === 'object' ? msg.content.text : msg.content;
     const images = typeof msg.content === 'object' ? msg.content.images : undefined;
-    appendMessage(msg.role, text, images);
+    const reasoning = typeof msg.content === 'object' ? msg.content.reasoning : undefined;
+    const toolUses = typeof msg.content === 'object' ? msg.content.toolUses : undefined;
+    appendMessage(msg.role, text, images, { reasoning, toolUses });
   }
 }
 
-function appendMessage(role, text, images) {
+function appendMessage(role, text, images, meta = {}) {
   emptyState.classList.add('hidden');
   const wrapper = document.createElement('div');
   wrapper.className = 'max-w-4xl mx-auto flex ' + (role === 'user' ? 'justify-end' : 'justify-start');
@@ -247,8 +452,90 @@ function appendMessage(role, text, images) {
     bubble.appendChild(imgGrid);
   }
 
+  // Render stored reasoning block (collapsed)
+  if (role === 'assistant' && meta.reasoning) {
+    const details = document.createElement('details');
+    details.className = 'mb-2 text-zinc-500 text-xs';
+    const summary = document.createElement('summary');
+    summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
+    summary.textContent = 'Thought process';
+    const body = document.createElement('pre');
+    body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-60 overflow-y-auto slim-scrollbar';
+    body.textContent = meta.reasoning;
+    details.appendChild(summary);
+    details.appendChild(body);
+    bubble.appendChild(details);
+  }
+
+  // Render stored tool uses (collapsed)
+  if (role === 'assistant' && meta.toolUses && meta.toolUses.length > 0) {
+    const container = document.createElement('div');
+    container.className = 'tool-use-container';
+    for (const tu of meta.toolUses) {
+      const detail = document.createElement('details');
+      detail.className = 'mb-2 text-zinc-500 text-xs';
+      const summary = document.createElement('summary');
+      summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
+      let sourcesTag = '';
+      if (tu.name === 'web_search') {
+        try {
+          const parsed = JSON.parse(tu.result);
+          if (parsed.sources) sourcesTag = ` <span class="text-zinc-600">— ${parsed.sources}</span>`;
+        } catch {}
+      }
+      summary.innerHTML = `<span class="mr-1">🔧</span> Used <strong>${tu.name}</strong>${sourcesTag}`;
+      const body = document.createElement('pre');
+      body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
+      body.textContent = tu.result;
+      detail.appendChild(summary);
+      detail.appendChild(body);
+      container.appendChild(detail);
+      // Collapsible image thumbnails for stored tool results
+      try {
+        const parsedTu = JSON.parse(tu.result);
+        const tuImageUrls = extractImageUrls(parsedTu);
+        if (tuImageUrls.length > 0) {
+          const imgDetail = document.createElement('details');
+          imgDetail.className = 'mb-2 border-t border-zinc-800 pt-2';
+          const imgSummary = document.createElement('summary');
+          imgSummary.className = 'text-xs text-zinc-400 cursor-pointer hover:text-zinc-300 transition-colors select-none';
+          imgSummary.textContent = `📷 Photos (${tuImageUrls.slice(0, 12).length})`;
+          imgDetail.appendChild(imgSummary);
+          const imgGrid = document.createElement('div');
+          imgGrid.className = 'msg-image-grid mt-2';
+          for (const url of tuImageUrls.slice(0, 12)) {
+            const img = document.createElement('img');
+            img.src = url;
+            img.className = 'msg-image-thumb';
+            img.loading = 'lazy';
+            img.alt = '';
+            img.addEventListener('click', () => {
+              const overlay = document.createElement('div');
+              overlay.className = 'image-overlay';
+              const full = document.createElement('img');
+              full.src = url;
+              full.className = 'image-overlay-img';
+              overlay.appendChild(full);
+              overlay.addEventListener('click', () => overlay.remove());
+              document.body.appendChild(overlay);
+            });
+            img.addEventListener('error', () => img.remove());
+            imgGrid.appendChild(img);
+          }
+          imgDetail.appendChild(imgGrid);
+          container.appendChild(imgDetail);
+        }
+      } catch {}
+      const dl = makeFileDownloadLink(tu.name, tu.result);
+      if (dl) container.appendChild(dl);
+    }
+    bubble.appendChild(container);
+  }
+
   if (role === 'assistant' && text) {
-    renderFormattedContent(text, bubble);
+    const contentSpan = document.createElement('span');
+    renderFormattedContent(text, contentSpan, { renderMermaid: true });
+    bubble.appendChild(contentSpan);
   } else if (text) {
     const textNode = document.createTextNode(text);
     bubble.appendChild(textNode);
@@ -302,6 +589,8 @@ async function sendMessage(content, images) {
       body: JSON.stringify({
         content,
         images: images ? images.map(i => ({ mimeType: i.mimeType, base64: i.base64 })) : undefined,
+        applets: state.appletsEnabled,
+        autorun: state.autorunEnabled,
       }),
       signal: state.abortController.signal,
     });
@@ -337,7 +626,50 @@ async function sendMessage(content, images) {
               reasoningBody.textContent = accumulatedReasoning;
               responseArea.scrollTop = responseArea.scrollHeight;
             }
+            if (data.tool_content) {
+              // Show LLM's text during tool rounds so user knows it's not hung
+              if (!hasToolUse) {
+                hasToolUse = true;
+                bubble.insertBefore(toolUseContainer, contentSpan);
+              }
+              if (!toolUseContainer._thinkingEl) {
+                const el = document.createElement('details');
+                el.className = 'mb-2 text-zinc-500 text-xs';
+                el.open = true;
+                el.innerHTML = '<summary class="cursor-pointer select-none text-zinc-500 hover:text-zinc-400"><span class="mr-1">⏳</span> Working...</summary>';
+                const body = document.createElement('pre');
+                body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
+                el.appendChild(body);
+                toolUseContainer.appendChild(el);
+                toolUseContainer._thinkingEl = body;
+              }
+              toolUseContainer._thinkingEl.textContent += data.tool_content;
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
+            if (data.tool_status) {
+              // Show inline status for slow operations (prebook, book, cancel)
+              if (!hasToolUse) {
+                hasToolUse = true;
+                bubble.insertBefore(toolUseContainer, contentSpan);
+              }
+              // Remove previous status if any
+              const prev = toolUseContainer.querySelector('.tool-status-msg');
+              if (prev) prev.remove();
+              const statusEl = document.createElement('div');
+              statusEl.className = 'tool-status-msg text-xs text-indigo-400 py-1 animate-pulse';
+              statusEl.textContent = data.tool_status;
+              toolUseContainer.appendChild(statusEl);
+              responseArea.scrollTop = responseArea.scrollHeight;
+            }
             if (data.tool_use) {
+              // Clear status and "Working..." indicators when a tool result arrives
+              const statusMsg = toolUseContainer.querySelector('.tool-status-msg');
+              if (statusMsg) statusMsg.remove();
+              if (toolUseContainer._thinkingEl) {
+                toolUseContainer._thinkingEl.closest('details').remove();
+                delete toolUseContainer._thinkingEl;
+              }
+              trackToolUse(data.tool_use.name);
               if (!hasToolUse) {
                 hasToolUse = true;
                 bubble.insertBefore(toolUseContainer, contentSpan);
@@ -346,16 +678,128 @@ async function sendMessage(content, images) {
               detail.className = 'mb-2 text-zinc-500 text-xs';
               const summary = document.createElement('summary');
               summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
-              summary.innerHTML = `<span class="mr-1">🔧</span> Used <strong>${data.tool_use.name}</strong>`;
+              let sourcesTag = '';
+              if (data.tool_use.name === 'web_search') {
+                try {
+                  const parsed = JSON.parse(data.tool_use.result);
+                  if (parsed.sources) sourcesTag = ` <span class="text-zinc-600">— ${parsed.sources}</span>`;
+                } catch {}
+                pollSearch();
+              }
+              // Parse result to check for _markdown and build summary info
+              let parsedResult = null;
+              try { parsedResult = JSON.parse(data.tool_use.result); } catch {}
+
+              // Build richer summary line with key metadata
+              let metaTag = '';
+              if (parsedResult && !parsedResult.error) {
+                const counts = [];
+                if (parsedResult.totalCount != null) counts.push(`${parsedResult.totalCount} items`);
+                else if (parsedResult.totalPositions != null) counts.push(`${parsedResult.totalPositions} positions`);
+                else if (parsedResult.totalPairs != null) counts.push(`${parsedResult.totalPairs} pairs`);
+                if (parsedResult._autoSaved) counts.push('auto-saved');
+                if (parsedResult.savedFile) counts.push(parsedResult.savedFile.filename);
+                if (counts.length) metaTag = ` <span class="text-zinc-600">— ${counts.join(', ')}</span>`;
+              }
+              summary.innerHTML = `<span class="mr-1">🔧</span> Used <strong>${data.tool_use.name}</strong>${sourcesTag}${metaTag}`;
+
+              // Raw JSON goes inside the collapsible
               const body = document.createElement('pre');
               body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
               body.textContent = data.tool_use.result;
               detail.appendChild(summary);
               detail.appendChild(body);
+
+              // Render _markdown tables inside the collapsible details (user can expand to see)
+              if (parsedResult?._markdown) {
+                const mdDiv = document.createElement('div');
+                mdDiv.className = 'mt-2 text-sm border-t border-zinc-800 pt-2';
+                renderFormattedContent(parsedResult._markdown, mdDiv);
+                detail.appendChild(mdDiv);
+              }
+
+              // Detect image URLs in tool results and render as collapsible thumbnails
+              const imageUrls = extractImageUrls(parsedResult);
+              if (imageUrls.length > 0) {
+                const imgDetail = document.createElement('details');
+                imgDetail.className = 'mt-2 border-t border-zinc-800 pt-2';
+                const imgSummary = document.createElement('summary');
+                imgSummary.className = 'text-xs text-zinc-400 cursor-pointer hover:text-zinc-300 transition-colors select-none';
+                imgSummary.textContent = `📷 Photos (${imageUrls.slice(0, 12).length})`;
+                imgDetail.appendChild(imgSummary);
+                const imgGrid = document.createElement('div');
+                imgGrid.className = 'msg-image-grid mt-2';
+                for (const url of imageUrls.slice(0, 12)) {
+                  const img = document.createElement('img');
+                  img.src = url;
+                  img.className = 'msg-image-thumb';
+                  img.loading = 'lazy';
+                  img.alt = '';
+                  img.addEventListener('click', () => {
+                    const overlay = document.createElement('div');
+                    overlay.className = 'image-overlay';
+                    const full = document.createElement('img');
+                    full.src = url;
+                    full.className = 'image-overlay-img';
+                    overlay.appendChild(full);
+                    overlay.addEventListener('click', () => overlay.remove());
+                    document.body.appendChild(overlay);
+                  });
+                  img.addEventListener('error', () => img.remove());
+                  imgGrid.appendChild(img);
+                }
+                imgDetail.appendChild(imgGrid);
+                toolUseContainer.appendChild(imgDetail);
+              }
+
               toolUseContainer.appendChild(detail);
+
+              const dl = makeFileDownloadLink(data.tool_use.name, data.tool_use.result);
+              if (dl) toolUseContainer.appendChild(dl);
               responseArea.scrollTop = responseArea.scrollHeight;
             }
+            if (data.confirm_command) {
+              if (!hasToolUse) {
+                hasToolUse = true;
+                bubble.insertBefore(toolUseContainer, contentSpan);
+              }
+              const confirmDiv = document.createElement('div');
+              confirmDiv.className = 'my-2 p-3 bg-zinc-900 border border-zinc-700 rounded-lg text-xs';
+              confirmDiv.innerHTML = `
+                <div class="text-zinc-400 mb-2">Run command:</div>
+                <pre class="text-amber-400 mb-2 whitespace-pre-wrap">${data.confirm_command.command.replace(/</g, '&lt;')}</pre>
+                <div class="flex gap-2">
+                  <button class="cmd-approve px-3 py-1 rounded font-medium" style="color:#4ade80">✓ Approve</button>
+                  <button class="cmd-deny px-3 py-1 rounded font-medium" style="color:#f87171">✕ Deny</button>
+                </div>`;
+              toolUseContainer.appendChild(confirmDiv);
+              responseArea.scrollTop = responseArea.scrollHeight;
+
+              const approveBtn = confirmDiv.querySelector('.cmd-approve');
+              const denyBtn = confirmDiv.querySelector('.cmd-deny');
+              const respond = async (approved) => {
+                approveBtn.disabled = true;
+                denyBtn.disabled = true;
+                confirmDiv.querySelector('.flex').innerHTML = `<span class="${approved ? 'text-green-400' : 'text-red-400'}">${approved ? 'Approved' : 'Denied'}</span>`;
+                await fetch(`/api/conversations/${state.currentConversationId}/confirm`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ approved }),
+                });
+              };
+              approveBtn.addEventListener('click', () => respond(true));
+              denyBtn.addEventListener('click', () => respond(false));
+              const onEnter = (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); document.removeEventListener('keydown', onEnter); respond(true); }
+              };
+              document.addEventListener('keydown', onEnter);
+            }
             if (data.content) {
+              // Clear the "Working..." indicator when final content arrives
+              if (toolUseContainer._thinkingEl) {
+                toolUseContainer._thinkingEl.closest('details').remove();
+                delete toolUseContainer._thinkingEl;
+              }
               if (hasReasoning) reasoningSummary.textContent = 'Thought process';
               accumulated += data.content;
               scheduleRender(accumulated, contentSpan);
@@ -380,7 +824,7 @@ async function sendMessage(content, images) {
     }
   } finally {
     clearTimeout(_renderTimer);
-    if (accumulated) renderFormattedContent(accumulated, contentSpan);
+    if (accumulated) renderFormattedContent(accumulated, contentSpan, { renderMermaid: true });
     state.abortController = null;
     sendBtn.disabled = false;
     input.focus();
@@ -439,20 +883,221 @@ async function pollInternet() {
   }
 }
 
-// ── Search engine check ──────────────────────────────
+// ── Search engine check & switcher ───────────────────
+let searchEngines = [];
+
 async function pollSearch() {
   try {
     const res = await fetch('/api/health/search');
-    const { ok, engine } = await res.json();
+    const { ok, engine, engines } = await res.json();
     searchDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
-    searchLabel.textContent = engine ? `${engine} Search` : 'Tavily Search';
-    searchLabel.className = ok ? 'text-green-500' : 'text-red-400';
+    searchLabel.textContent = engine ? `${engine} Search` : 'Search';
+    searchToggle.className = `flex items-center gap-1 transition-colors ${ok ? 'text-green-500 hover:text-green-400' : 'text-red-400 hover:text-red-300'}`;
+    if (engines) searchEngines = engines;
   } catch {
     searchDot.className = 'inline-block w-2 h-2 rounded-full bg-red-500';
-    searchLabel.textContent = 'Tavily Search';
-    searchLabel.className = 'text-red-400';
+    searchLabel.textContent = 'Search';
+    searchToggle.className = 'flex items-center gap-1 transition-colors text-red-400 hover:text-red-300';
   }
 }
+
+function renderSearchDropdown() {
+  searchDropdown.innerHTML = '';
+  for (const eng of searchEngines) {
+    const item = document.createElement('button');
+    item.className = `w-full text-left px-3 py-1.5 text-xs transition-colors ${
+      eng.active
+        ? 'text-indigo-400 bg-indigo-500/10'
+        : eng.configured
+          ? 'text-zinc-300 hover:bg-zinc-700'
+          : 'text-zinc-600 cursor-not-allowed'
+    }`;
+    item.textContent = eng.label + (eng.active ? ' ✓' : !eng.configured ? ' (no key)' : '');
+    if (!eng.active && eng.configured) {
+      item.addEventListener('click', () => switchSearchEngine(eng.id));
+    }
+    searchDropdown.appendChild(item);
+  }
+}
+
+async function switchSearchEngine(engineId) {
+  searchDropdown.classList.add('hidden');
+  // Immediately show checking state
+  searchDot.className = 'inline-block w-2 h-2 rounded-full bg-zinc-600 animate-pulse';
+  searchLabel.textContent = 'Switching…';
+  searchToggle.className = 'flex items-center gap-1 transition-colors text-zinc-500';
+  try {
+    await fetch('/api/health/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine: engineId }),
+    });
+  } catch { /* pollSearch will pick up the state */ }
+  await pollSearch();
+}
+
+searchToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const isOpen = !searchDropdown.classList.contains('hidden');
+  searchDropdown.classList.toggle('hidden');
+  if (!isOpen) renderSearchDropdown();
+});
+
+document.addEventListener('click', () => {
+  searchDropdown.classList.add('hidden');
+  toolUsageDropdown.classList.add('hidden');
+  etradePanel.classList.add('hidden');
+});
+
+searchDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Tool usage tracking ─────────────────────────────
+const toolUsageCounts = {};
+
+function trackToolUse(name) {
+  toolUsageCounts[name] = (toolUsageCounts[name] || 0) + 1;
+  const total = Object.values(toolUsageCounts).reduce((a, b) => a + b, 0);
+  toolUsageCount.textContent = total;
+  toolUsageToggle.classList.remove('hidden');
+}
+
+function renderToolUsageDropdown() {
+  toolUsageDropdown.innerHTML = '';
+  const entries = Object.entries(toolUsageCounts).sort((a, b) => b[1] - a[1]);
+  for (const [name, count] of entries) {
+    const item = document.createElement('div');
+    item.className = 'px-3 py-1.5 text-xs flex justify-between gap-4';
+    item.innerHTML = `<span class="text-zinc-400">${name}</span><span class="text-zinc-500">${count}</span>`;
+    toolUsageDropdown.appendChild(item);
+  }
+}
+
+toolUsageToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const isOpen = !toolUsageDropdown.classList.contains('hidden');
+  toolUsageDropdown.classList.toggle('hidden');
+  if (!isOpen) renderToolUsageDropdown();
+});
+
+toolUsageDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+// ── LiteAPI health check ─────────────────────────────
+async function pollLiteapi() {
+  try {
+    const res = await fetch('/api/health/liteapi');
+    const { ok, configured } = await res.json();
+    if (!configured) return; // no key, hide entirely
+    liteapiStatus.classList.remove('hidden');
+    liteapiDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
+    liteapiLabel.textContent = 'LiteAPI';
+    liteapiLabel.className = ok ? 'text-green-500' : 'text-red-400';
+  } catch {}
+}
+
+// ── E*TRADE auth flow ────────────────────────────────
+async function pollEtrade() {
+  try {
+    const res = await fetch('/api/etrade/status');
+    const { authenticated, configured } = await res.json();
+    if (!configured) return; // no keys, hide entirely
+    etradeStatus.classList.remove('hidden');
+    if (authenticated) {
+      etradeDot.className = 'inline-block w-2 h-2 rounded-full bg-green-500 pulse-dot';
+      etradeToggle.className = 'text-green-500';
+      etradeToggle.textContent = 'E*TRADE';
+    } else {
+      etradeDot.className = 'inline-block w-2 h-2 rounded-full bg-amber-500';
+      etradeToggle.className = 'text-amber-500 hover:text-amber-400 transition-colors';
+      etradeToggle.textContent = 'E*TRADE (connect)';
+    }
+  } catch {}
+}
+
+function renderEtradePanel(authenticated) {
+  if (authenticated) {
+    etradePanelContent.innerHTML = `
+      <div class="text-xs text-green-400 mb-1">Connected</div>
+      <div class="text-xs text-zinc-500 mb-2">Ask the assistant about your accounts, balances, portfolio, or transactions.</div>
+      <button id="etrade-disconnect-btn" class="w-full bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-xs font-medium px-3 py-1.5 rounded transition-colors">
+        Disconnect &amp; Reconnect
+      </button>`;
+    document.getElementById('etrade-disconnect-btn').addEventListener('click', async () => {
+      await fetch('/api/etrade/disconnect', { method: 'POST' });
+      pollEtrade();
+      renderEtradePanel(false);
+    });
+    return;
+  }
+  etradePanelContent.innerHTML = `
+    <div id="etrade-step-1">
+      <div class="text-xs text-zinc-400 mb-2">Connect your E*TRADE account (read-only)</div>
+      <button id="etrade-auth-btn" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">
+        Open E*TRADE Authorization
+      </button>
+    </div>
+    <div id="etrade-step-2" class="hidden mt-2">
+      <div class="text-xs text-zinc-400 mb-2">Paste the verifier code from E*TRADE:</div>
+      <div class="flex gap-2">
+        <input id="etrade-verifier" type="text" placeholder="Verifier code"
+          class="flex-1 bg-zinc-900 text-zinc-100 text-xs px-2 py-1.5 rounded border border-zinc-600 outline-none focus:border-zinc-400">
+        <button id="etrade-submit-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium px-3 py-1.5 rounded transition-colors">
+          Connect
+        </button>
+      </div>
+      <div id="etrade-error" class="text-red-400 text-xs mt-1 hidden"></div>
+    </div>`;
+
+  document.getElementById('etrade-auth-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('etrade-auth-btn');
+    btn.textContent = 'Opening…';
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/etrade/auth');
+      const { url, error } = await res.json();
+      if (error) throw new Error(error);
+      window.open(url, '_blank');
+      document.getElementById('etrade-step-2').classList.remove('hidden');
+      btn.textContent = 'Opened — paste code below';
+    } catch (err) {
+      btn.textContent = 'Failed — try again';
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById('etrade-submit-btn').addEventListener('click', async () => {
+    const verifier = document.getElementById('etrade-verifier').value.trim();
+    const errEl = document.getElementById('etrade-error');
+    if (!verifier) return;
+    errEl.classList.add('hidden');
+    try {
+      const res = await fetch('/api/etrade/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verifier }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      etradePanel.classList.add('hidden');
+      await pollEtrade();
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.classList.remove('hidden');
+    }
+  });
+}
+
+etradeToggle.addEventListener('click', async (e) => {
+  e.stopPropagation();
+  const isOpen = !etradePanel.classList.contains('hidden');
+  etradePanel.classList.toggle('hidden');
+  if (!isOpen) {
+    const res = await fetch('/api/etrade/status');
+    const { authenticated } = await res.json();
+    renderEtradePanel(authenticated);
+  }
+});
+
+etradePanel.addEventListener('click', (e) => e.stopPropagation());
 
 // ── Slot panel ────────────────────────────────────────
 let slotPanelOpen = false;
@@ -643,6 +1288,20 @@ function clearPendingImages() {
 
 attachBtn.addEventListener('click', () => imageInput.click());
 
+// Applet toggle
+appletToggle.checked = state.appletsEnabled;
+appletToggle.addEventListener('change', () => {
+  state.appletsEnabled = appletToggle.checked;
+  localStorage.setItem('appletsEnabled', state.appletsEnabled);
+});
+
+// Autorun toggle
+autorunToggle.checked = state.autorunEnabled;
+autorunToggle.addEventListener('change', () => {
+  state.autorunEnabled = autorunToggle.checked;
+  localStorage.setItem('autorunEnabled', state.autorunEnabled);
+});
+
 imageInput.addEventListener('change', () => {
   for (const file of imageInput.files) {
     addPendingImage(file);
@@ -680,15 +1339,228 @@ form.addEventListener('drop', (e) => {
   }
 });
 
+// ── Prompt Library ────────────────────────────────────
+promptsToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toolsDropdown.classList.add('hidden');
+  promptsDropdown.classList.toggle('hidden');
+});
+promptsDropdown.addEventListener('click', (e) => e.stopPropagation());
+toolsDropdown.addEventListener('click', (e) => e.stopPropagation());
+document.addEventListener('click', (e) => {
+  if (e.target !== promptsToggle) promptsDropdown.classList.add('hidden');
+  if (e.target !== toolsToggle) toolsDropdown.classList.add('hidden');
+});
+
+// ── Tools Panel ──────────────────────────────────────
+toolsToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  promptsDropdown.classList.add('hidden');
+  toolsDropdown.classList.toggle('hidden');
+  if (!toolsDropdown.classList.contains('hidden')) refreshTools();
+});
+
+async function refreshTools() {
+  try {
+    const tools = await (await fetch('/api/tools')).json();
+    renderTools(tools);
+  } catch {}
+}
+
+function renderTools(tools) {
+  toolsList.innerHTML = '';
+  for (const t of tools) {
+    const item = document.createElement('div');
+    item.className = 'relative flex items-center gap-2 px-3 py-2 border-b border-zinc-700/50 hover:bg-zinc-700/30 transition-colors';
+
+    const toggle = document.createElement('button');
+    Object.assign(toggle.style, {
+      width: '32px', height: '16px', borderRadius: '9999px', position: 'relative',
+      flexShrink: '0', transition: 'background 0.2s', cursor: 'pointer', border: 'none',
+      background: t.enabled ? '#6366f1' : '#52525b',
+    });
+    const knob = document.createElement('span');
+    Object.assign(knob.style, {
+      position: 'absolute', top: '2px', width: '12px', height: '12px',
+      borderRadius: '9999px', background: 'white', transition: 'left 0.2s',
+      left: t.enabled ? '16px' : '2px',
+    });
+    toggle.appendChild(knob);
+    toggle.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const res = await fetch(`/api/tools/${t.name}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !t.enabled }),
+      });
+      if (res.ok) refreshTools();
+    });
+
+    const name = document.createElement('span');
+    Object.assign(name.style, { fontSize: '12px', fontWeight: '500', cursor: 'default', color: t.enabled ? '#e4e4e7' : '#71717a' });
+    name.textContent = t.name;
+
+    item.appendChild(toggle);
+    item.appendChild(name);
+
+    // Popup on hover — appended to body with inline styles to avoid clipping and Tailwind build issues
+    let popup = null;
+    item.addEventListener('mouseenter', () => {
+      popup = document.createElement('div');
+      Object.assign(popup.style, {
+        position: 'fixed', zIndex: '9999', width: '300px', maxHeight: '400px',
+        overflowY: 'auto', padding: '12px', background: '#18181b', border: '1px solid #52525b',
+        borderRadius: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', pointerEvents: 'none',
+      });
+      const descEl = document.createElement('div');
+      Object.assign(descEl.style, { fontSize: '12px', color: '#d4d4d8', lineHeight: '1.6', whiteSpace: 'pre-wrap' });
+      descEl.textContent = t.description;
+      popup.appendChild(descEl);
+      if (t.parameters.length > 0) {
+        const paramsEl = document.createElement('div');
+        Object.assign(paramsEl.style, { marginTop: '8px', fontSize: '10px', color: '#71717a' });
+        paramsEl.textContent = 'params: ' + t.parameters.join(', ');
+        popup.appendChild(paramsEl);
+      }
+      document.body.appendChild(popup);
+      const rect = item.getBoundingClientRect();
+      let top = rect.top;
+      let left = rect.right + 8;
+      if (left + 308 > window.innerWidth) left = rect.left - 308 - 8;
+      if (top + popup.offsetHeight > window.innerHeight) top = window.innerHeight - popup.offsetHeight - 8;
+      popup.style.top = top + 'px';
+      popup.style.left = left + 'px';
+    });
+    item.addEventListener('mouseleave', () => {
+      if (popup) { popup.remove(); popup = null; }
+    });
+
+    toolsList.appendChild(item);
+  }
+}
+
+function expandPromptMacros(text) {
+  const now = new Date();
+  return text
+    .replace(/\{\$date\}/gi, now.toLocaleDateString('en-CA'))
+    .replace(/\{\$time\}/gi, now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }))
+    .replace(/\{\$year\}/gi, String(now.getFullYear()))
+    .replace(/\{\$month\}/gi, now.toLocaleDateString('en-US', { month: 'long' }))
+    .replace(/\{\$day\}/gi, now.toLocaleDateString('en-US', { weekday: 'long' }));
+}
+
+async function refreshPrompts() {
+  try {
+    const prompts = await (await fetch('/api/prompts')).json();
+    renderPrompts(prompts);
+  } catch {}
+}
+
+function renderPrompts(prompts) {
+  promptList.innerHTML = '';
+  let dragSrcEl = null;
+
+  for (const p of prompts) {
+    const item = document.createElement('div');
+    item.className = 'group flex items-center gap-1 px-3 py-2 cursor-grab border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors';
+    item.draggable = true;
+    item.dataset.id = p.id;
+
+    item.addEventListener('dragstart', (e) => {
+      dragSrcEl = item;
+      item.style.opacity = '0.4';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    item.addEventListener('dragend', () => {
+      item.style.opacity = '1';
+      promptList.querySelectorAll('[data-id]').forEach(el => el.classList.remove('border-t-indigo-500'));
+    });
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      item.classList.add('border-t-indigo-500');
+    });
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('border-t-indigo-500');
+    });
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      item.classList.remove('border-t-indigo-500');
+      if (dragSrcEl === item) return;
+      promptList.insertBefore(dragSrcEl, item);
+      const ids = [...promptList.querySelectorAll('[data-id]')].map(el => el.dataset.id);
+      await fetch('/api/prompts/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+    });
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'flex-1 text-xs text-zinc-300';
+    titleSpan.textContent = p.title || p.text.slice(0, 60);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await fetch(`/api/prompts/${p.id}`, { method: 'DELETE' });
+      refreshPrompts();
+    });
+
+    item.addEventListener('click', () => {
+      input.value = expandPromptMacros(p.text);
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      input.focus();
+    });
+
+    item.appendChild(titleSpan);
+    item.appendChild(delBtn);
+    promptList.appendChild(item);
+  }
+}
+
+clearPromptBtn.addEventListener('click', () => {
+  input.value = '';
+  input.style.height = 'auto';
+  input.focus();
+});
+
+savePromptBtn.addEventListener('click', async () => {
+  const text = input.value.trim();
+  if (!text) return;
+  savePromptBtn.disabled = true;
+  savePromptBtn.textContent = '…';
+  try {
+    await fetch('/api/prompts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    input.value = '';
+    input.style.height = 'auto';
+    refreshPrompts();
+  } finally {
+    savePromptBtn.disabled = false;
+    savePromptBtn.textContent = 'Save';
+  }
+});
+
 // ── Init ──────────────────────────────────────────────
 (async function init() {
   await refreshSidebar();
+  refreshPrompts();
   pollHealth();
   setInterval(pollHealth, 5000);
   pollInternet();
   setInterval(pollInternet, 30000);
   pollSearch();
   setInterval(pollSearch, 60000);
+  pollLiteapi();
+  setInterval(pollLiteapi, 60000);
+  pollEtrade();
   refreshSlots();
   setInterval(refreshSlots, 5000);
 })();

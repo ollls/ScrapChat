@@ -16,7 +16,25 @@ export default {
     baseUrl: process.env.LLAMA_URL || 'http://localhost:8080',
     maxContextTokens: parseInt(process.env.LLAMA_MAX_CONTEXT || '131072', 10),
   },
+  search: {
+    engine: process.env.SEARCH_ENGINE || 'keiro', // 'keiro', 'tavily', or 'both'
+  },
   tavily: {
     apiKey: process.env.TAVILY_API_KEY || '',
+  },
+  keiro: {
+    apiKey: process.env.KEIRO_API_KEY || '',
+    baseUrl: process.env.KEIRO_BASE_URL || 'https://kierolabs.space/api',
+  },
+  python: {
+    venvPath: process.env.PYTHON_VENV || '',
+  },
+  liteapi: {
+    apiKey: process.env.LITEAPI_KEY || '',
+  },
+  etrade: {
+    consumerKey: process.env.ETRADE_CONSUMER_KEY || '',
+    consumerSecret: process.env.ETRADE_CONSUMER_SECRET || '',
+    sandbox: process.env.ETRADE_SANDBOX === 'true',
   },
 };

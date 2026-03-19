@@ -138,6 +138,17 @@
   scrollbar-color: #3f3f46 transparent;
 }
 
+/* Mermaid charts */
+.mermaid-chart {
+  margin: 0.75rem 0;
+  overflow-x: auto;
+}
+.mermaid-chart svg {
+  min-width: 105%;
+  max-width: 110%;
+  height: auto;
+}
+
 /* Image preview strip (pending images before send) */
 .image-preview-thumb {
   position: relative;
@@ -207,6 +218,17 @@
   max-height: 90vh;
   object-fit: contain;
   border-radius: 0.5rem;
+}
+
+/* Applet wrappers */
+.applet-wrapper {
+  margin: 0.75rem 0;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid #2a2a4a;
+}
+.applet-fallback {
+  margin: 0.5rem 0;
 }
 
 /* Drag-over indicator */
