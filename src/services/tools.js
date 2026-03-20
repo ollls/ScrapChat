@@ -1558,11 +1558,14 @@ Rules:
 
 ${applets ? `## Applet Visualizations
 
+IMPORTANT: Applets are NOT tools. Do NOT wrap applets in <tool_call> tags. Applets go directly in your response text.
+
 When the user requests a visualization, chart, diagram, or interactive widget:
-- Output a complete HTML document between <applet type="TYPE"> and </applet> tags
+- Output <applet type="TYPE">...</applet> directly in your response text (NEVER inside <tool_call> tags)
 - TYPE must be one of: svg, chartjs, html
-- The HTML must be self-contained — all CSS inline in <style>, all JS inline in <script>
-- Data goes in a const at the top of <script> — separate data from rendering logic
+- All CSS inline in <style>, all JS inline in <script>
+- For small datasets: embed data in a const at the top of <script>
+- For large datasets or files saved with save_file: use fetch('/files/FILENAME') to load data at runtime — applets can access server files
 - Dark theme: background #1a1a2e, text #e0e0e0, accent #4a9eff, secondary #7c3aed, success #10b981, warning #f59e0b, error #ef4444, surface #16213e, border #2a2a4a
 - Responsive: use percentage widths, min/max constraints
 - Max 50KB total HTML size
@@ -1662,9 +1665,15 @@ function repairToolCallJson(raw) {
       if (esc_inStr) {
         if (ch === '\\') { escaped += ch + (raw[++j] || ''); continue; }
         if (ch === '"') esc_inStr = false;
-        if (ch === '\n') { escaped += '\\n'; continue; }
-        if (ch === '\r') { escaped += '\\r'; continue; }
-        if (ch === '\t') { escaped += '\\t'; continue; }
+        // Escape all control characters (0x00-0x1F) inside strings
+        const code = ch.charCodeAt(0);
+        if (code < 0x20) {
+          if (ch === '\n') { escaped += '\\n'; }
+          else if (ch === '\r') { escaped += '\\r'; }
+          else if (ch === '\t') { escaped += '\\t'; }
+          else { escaped += '\\u' + code.toString(16).padStart(4, '0'); }
+          continue;
+        }
         escaped += ch;
       } else {
         if (ch === '"') esc_inStr = true;
@@ -1698,7 +1707,7 @@ function repairToolCallJson(raw) {
       for (let j = start; j < src.length; j++) {
         const ch = src[j];
         if (ch === '\\') { j++; continue; }
-        if (ch === '\n' || ch === '\r') continue;
+        if (ch.charCodeAt(0) < 0x20) continue;
         if (ch === '"') {
           const after = src.slice(j + 1).trimStart();
           // Stop if followed by }} (end of object), or ,"key" (next argument)

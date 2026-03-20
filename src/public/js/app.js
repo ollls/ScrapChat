@@ -278,9 +278,9 @@ window.addEventListener('load', () => {
 
   const iframe = document.createElement('iframe');
   iframe.className = 'applet-iframe';
-  iframe.sandbox = 'allow-scripts';
+  iframe.sandbox = 'allow-scripts allow-same-origin';
   iframe.srcdoc = html;
-  iframe.style.cssText = 'width:100%;height:500px;border:none;border-radius:0.5rem;overflow:hidden;display:block';
+  iframe.style.cssText = 'width:100%;height:500px;border:none;border-radius:0.5rem;overflow:auto;display:block';
 
   const wrapper = document.createElement('div');
   wrapper.className = 'applet-wrapper';
@@ -315,6 +315,12 @@ function renderFormattedContent(text, container, { renderMermaid = false } = {})
         placeholder.replaceWith(createAppletIframe(applet));
       }
     });
+    // Expand bubble to full width when applets are present
+    const bubble = container.parentElement;
+    if (bubble) {
+      bubble.classList.remove('max-w-[80%]');
+      bubble.classList.add('max-w-full', 'w-full');
+    }
   }
 
   if (renderMermaid && typeof mermaid !== 'undefined') {
