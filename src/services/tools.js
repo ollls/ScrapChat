@@ -644,26 +644,35 @@ const tools = {
       if (!command?.trim()) return { error: 'command is required' };
       if (!context?.confirmFn) return { error: 'No confirmation channel available' };
 
-      const approved = await context.confirmFn(command);
+      let approved;
+      if (context.autorun) {
+        console.log(`[run_command] autorun enabled, skipping confirmation`);
+        approved = true;
+      } else {
+        approved = await context.confirmFn(command);
+      }
       if (!approved) return { denied: true, message: 'User denied command execution.' };
 
-      const { execSync } = await import('child_process');
-      try {
-        const stdout = execSync(command, {
+      const { exec } = await import('child_process');
+      return new Promise((resolve) => {
+        const proc = exec(command, {
           encoding: 'utf-8',
           timeout: 30000,
           maxBuffer: 1024 * 1024,
           cwd: process.env.HOME,
+        }, (err, stdout, stderr) => {
+          if (err) {
+            resolve({
+              command,
+              exitCode: err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 1 : (err.code ?? 1),
+              stdout: (stdout || '').slice(0, 4000),
+              stderr: ((stderr || '') + (err.killed ? '\n[run_command] Process killed: exceeded 30s timeout' : '')).slice(0, 4000),
+            });
+          } else {
+            resolve({ command, exitCode: 0, stdout: (stdout || '').slice(0, 8000) });
+          }
         });
-        return { command, exitCode: 0, stdout: stdout.slice(0, 8000) };
-      } catch (err) {
-        return {
-          command,
-          exitCode: err.status ?? 1,
-          stdout: (err.stdout || '').slice(0, 4000),
-          stderr: (err.stderr || '').slice(0, 4000),
-        };
-      }
+      });
     },
   },
   run_python: {
@@ -1335,40 +1344,49 @@ const tools = {
   },
 };
 
-// ── Command confirmation ────────────────────────────
-const pendingConfirmations = new Map(); // conversationId → { resolve, command }
+// ── Command confirmation (queue-based for parallel tool calls) ──
+const pendingConfirmations = new Map(); // conversationId → [{ resolve, command, timer }, ...]
 
 const CONFIRMATION_TIMEOUT_MS = 120000; // 2 minutes
 
 export function requestConfirmation(conversationId, command) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      if (pendingConfirmations.has(conversationId)) {
-        console.warn(`[confirm] timeout after ${CONFIRMATION_TIMEOUT_MS / 1000}s for conversation ${conversationId}`);
-        pendingConfirmations.delete(conversationId);
-        resolve(false);
+      const queue = pendingConfirmations.get(conversationId);
+      if (queue) {
+        const idx = queue.findIndex(e => e.command === command && e.resolve === resolve);
+        if (idx !== -1) {
+          console.warn(`[confirm] timeout after ${CONFIRMATION_TIMEOUT_MS / 1000}s for conversation ${conversationId}`);
+          queue.splice(idx, 1);
+          if (queue.length === 0) pendingConfirmations.delete(conversationId);
+          resolve(false);
+        }
       }
     }, CONFIRMATION_TIMEOUT_MS);
-    pendingConfirmations.set(conversationId, { resolve, command, timer });
+    if (!pendingConfirmations.has(conversationId)) pendingConfirmations.set(conversationId, []);
+    pendingConfirmations.get(conversationId).push({ resolve, command, timer });
   });
 }
 
 export function resolveConfirmation(conversationId, approved) {
-  const pending = pendingConfirmations.get(conversationId);
-  if (!pending) return false;
-  clearTimeout(pending.timer);
-  pendingConfirmations.delete(conversationId);
-  pending.resolve(approved);
+  const queue = pendingConfirmations.get(conversationId);
+  if (!queue || queue.length === 0) return false;
+  const entry = queue.shift();
+  clearTimeout(entry.timer);
+  if (queue.length === 0) pendingConfirmations.delete(conversationId);
+  entry.resolve(approved);
   return true;
 }
 
 export function cancelConfirmation(conversationId) {
-  const pending = pendingConfirmations.get(conversationId);
-  if (!pending) return false;
-  console.warn(`[confirm] cancelled for conversation ${conversationId} (client disconnected)`);
-  clearTimeout(pending.timer);
+  const queue = pendingConfirmations.get(conversationId);
+  if (!queue || queue.length === 0) return false;
+  console.warn(`[confirm] cancelled ${queue.length} pending confirmation(s) for conversation ${conversationId}`);
+  for (const entry of queue) {
+    clearTimeout(entry.timer);
+    entry.resolve(false);
+  }
   pendingConfirmations.delete(conversationId);
-  pending.resolve(false);
   return true;
 }
 
@@ -1411,6 +1429,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 ## Current Date and Time
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
+${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
@@ -1741,9 +1760,9 @@ function repairToolCallJson(raw) {
         }
       }
       if (end === -1) {
-        end = src.length - 1;
-        while (end > start && /[\s}]/.test(src[end])) end--;
-        if (src[end] !== '"') return null;
+        // Truncated output — take everything remaining, strip trailing junk
+        end = src.length;
+        while (end > start && /[\s}"}\]]/.test(src[end - 1])) end--;
       }
       return end > start ? unescapeJsonString(src.slice(start, end)) : null;
     };

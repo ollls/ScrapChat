@@ -14,6 +14,22 @@ const state = {
   location: '', // from server config (LOCATION env var)
 };
 
+let _elapsedInterval = null;
+function startElapsedTimer() {
+  const t0 = Date.now();
+  elapsedTimer.classList.remove('hidden');
+  elapsedTimer.textContent = '0s';
+  clearInterval(_elapsedInterval);
+  _elapsedInterval = setInterval(() => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    elapsedTimer.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  }, 1000);
+}
+function stopElapsedTimer() {
+  clearInterval(_elapsedInterval);
+  _elapsedInterval = null;
+}
+
 function flashMsg(text) {
   let el = document.getElementById('flash-msg');
   if (!el) {
@@ -54,6 +70,7 @@ const slotPanel = document.getElementById('slot-panel');
 const slotCards = document.getElementById('slot-cards');
 const contextBar = document.getElementById('context-bar');
 const contextLabel = document.getElementById('context-label');
+const elapsedTimer = document.getElementById('elapsed-timer');
 const inetDot = document.getElementById('inet-dot');
 const inetLabel = document.getElementById('inet-label');
 const searchDot = document.getElementById('search-dot');
@@ -638,6 +655,7 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
   if (!hideUserMessage) appendMessage('user', content, images);
   const bubble = appendMessage('assistant', '');
   sendBtn.disabled = true;
+  startElapsedTimer();
 
   // Create a collapsed reasoning block inside the bubble
   const reasoningDetails = document.createElement('details');
@@ -915,6 +933,7 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
     }
   } finally {
     clearTimeout(_renderTimer);
+    stopElapsedTimer();
     if (accumulated) renderFormattedContent(accumulated, contentSpan, { renderMermaid: true });
     state.abortController = null;
     sendBtn.disabled = false;

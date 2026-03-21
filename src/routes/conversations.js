@@ -382,13 +382,15 @@ router.post('/:id/messages', async (req, res) => {
           continue;
         }
         // Detect bare JSON or truncated tool calls and retry the round
-        if (/\{"name"\s*:\s*"/.test(result.content)) {
+        // Skip this check if content contains applet blocks (HTML/JS may have {"name": patterns)
+        const hasApplet = /<applet[\s>]/i.test(result.content);
+        if (!hasApplet && /\{"name"\s*:\s*"/.test(result.content)) {
           console.warn(`[tool-loop] response contains bare/truncated JSON tool call but parseToolCalls found nothing. Content (last 200 chars): ...${result.content.slice(-200)}`);
           llmMessages.push({ role: 'assistant', content: result.content });
           llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags or was truncated. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
-        if (/<tool_call/i.test(result.content)) {
+        if (!hasApplet && /<tool_call/i.test(result.content)) {
           console.warn(`[tool-loop] response contains <tool_call> tag but parseToolCalls found nothing. Content (first 500 chars):\n${result.content.slice(0, 500)}`);
           // Malformed tool call — ask LLM to retry with valid JSON instead of treating as final answer
           llmMessages.push({ role: 'assistant', content: result.content });
@@ -445,7 +447,7 @@ router.post('/:id/messages', async (req, res) => {
 
     // Safety net: if finalContent still looks like a bare tool call, try parsing and executing it
     // This catches edge cases where the tool loop somehow failed to parse a valid tool call
-    if (finalContent && /\{"name"\s*:\s*"/.test(finalContent)) {
+    if (finalContent && !/<applet[\s>]/i.test(finalContent) && /\{"name"\s*:\s*"/.test(finalContent)) {
       // Strip <think> blocks that might interfere with parsing
       const stripped = finalContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       const safetyCalls = parseToolCalls(stripped);
