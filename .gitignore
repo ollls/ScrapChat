@@ -5,3 +5,4 @@ data/
 !data/prompts.json
 !data/templates.json
 logs/
+.claude/settings.local.json
