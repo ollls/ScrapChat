@@ -637,6 +637,75 @@ const tools = {
       }
     },
   },
+  source_read: {
+    description: 'Read this application\'s own source code. This is YOUR source code — use it to understand how you work, review your own implementation, or help the user modify you.\n\n'
+      + 'Actions:\n'
+      + '- "tree": list all source files (respects .gitignore, excludes node_modules/data/logs)\n'
+      + '- "read": read a file. Requires "path" (relative to project root, e.g. "src/server.js")\n'
+      + '- "grep": search source code. Requires "pattern" (regex). Optional "glob" to filter files (e.g. "*.js")',
+    parameters: {
+      action: 'string (tree, read, grep)',
+      path: 'string (optional, relative file path for read)',
+      pattern: 'string (optional, regex for grep)',
+      glob: 'string (optional, file glob for grep)',
+    },
+    execute: async ({ action, path: filePath, pattern, glob: fileGlob }) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      const { resolve, relative, join: pjoin } = await import('path');
+      const sourceRoot = resolve(config.sourceDir);
+
+      switch (action) {
+        case 'tree': {
+          const { execSync } = await import('child_process');
+          try {
+            const output = execSync(
+              'find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/data/*" -not -path "*/logs/*" -not -path "*/public/css/output.css" -not -path "*/public/lib/*" -not -name "package-lock.json" | sort',
+              { cwd: sourceRoot, encoding: 'utf-8', timeout: 5000 }
+            );
+            const files = output.trim().split('\n').filter(Boolean);
+            return { root: sourceRoot, fileCount: files.length, files };
+          } catch (err) {
+            return { error: err.message };
+          }
+        }
+        case 'read': {
+          if (!filePath?.trim()) return { error: 'path is required for read action' };
+          const full = resolve(sourceRoot, filePath);
+          if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
+          try {
+            let content = await readFile(full, 'utf-8');
+            const lines = content.split('\n').length;
+            if (content.length > 15000) content = content.slice(0, 15000) + '\n...[truncated]';
+            return { path: filePath, lines, content };
+          } catch (err) {
+            if (err.code === 'ENOENT') return { error: `File not found: ${filePath}` };
+            return { error: err.message };
+          }
+        }
+        case 'grep': {
+          if (!pattern?.trim()) return { error: 'pattern is required for grep action' };
+          const { execSync } = await import('child_process');
+          try {
+            let cmd = `grep -rn --include="*.js" --include="*.json" --include="*.html" --include="*.css" --include="*.md"`;
+            if (fileGlob) cmd = `grep -rn --include="${fileGlob.replace(/"/g, '')}"`;
+            cmd += ` -E ${JSON.stringify(pattern)} . || true`;
+            const output = execSync(cmd, {
+              cwd: sourceRoot, encoding: 'utf-8', timeout: 10000, maxBuffer: 512 * 1024,
+            });
+            const lines = output.trim().split('\n').filter(Boolean);
+            if (lines.length > 50) {
+              return { pattern, matchCount: lines.length, matches: lines.slice(0, 50), truncated: true };
+            }
+            return { pattern, matchCount: lines.length, matches: lines };
+          } catch (err) {
+            return { error: err.message };
+          }
+        }
+        default:
+          return { error: 'Unknown action. Use: tree, read, grep' };
+      }
+    },
+  },
   run_command: {
     description: 'Run a shell command on the server. Requires user approval before execution. Requires a "command" argument (the shell command to run). Use for tasks like listing files, checking system info, installing packages, or any shell operation the user requests.',
     parameters: { command: 'string' },
@@ -1430,6 +1499,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read tool. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation when the user asks about how you work, wants to modify your code, or debug issues.` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 

@@ -635,8 +635,8 @@ function appendMessage(role, text, images, meta = {}) {
 
   if (role === 'assistant' && text) {
     const contentSpan = document.createElement('span');
-    renderFormattedContent(text, contentSpan, { renderMermaid: true });
     bubble.appendChild(contentSpan);
+    renderFormattedContent(text, contentSpan, { renderMermaid: true });
   } else if (text) {
     const textNode = document.createTextNode(text);
     bubble.appendChild(textNode);
@@ -1723,6 +1723,16 @@ async function refreshSessions() {
   try {
     const sessions = await (await fetch('/api/sessions')).json();
     renderSessions(sessions);
+    // Update session button tooltips
+    for (const btn of newChatButtons) {
+      const color = btn.dataset.session;
+      const match = sessions.find(s => s.color === color);
+      if (match) {
+        btn.dataset.tip = match.title || match.text.slice(0, 60);
+      } else {
+        delete btn.dataset.tip;
+      }
+    }
   } catch {}
 }
 
@@ -2344,6 +2354,7 @@ saveSessionBtn.addEventListener('click', async () => {
   }
   updateInputLock();
   refreshPrompts();
+  refreshSessions();
   pollLLM();
   setInterval(pollLLM, 5000);
   pollInternet();

@@ -21,6 +21,23 @@
       --btn-sgreen: #607D6B; /* slate green */
     }
     .session-btn:hover { filter: brightness(1.2); }
+    .session-btn { position: relative; }
+    .session-btn[data-tip]:hover::after {
+      content: attr(data-tip);
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #27272a;
+      color: #d4d4d8;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 100;
+      border: 1px solid #3f3f46;
+    }
 
     /* Flatpickr zinc/indigo overrides */
     .flatpickr-calendar { background: #1c1c22 !important; border-color: #3f3f46 !important; font-size: 13px; }
