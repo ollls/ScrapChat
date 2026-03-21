@@ -288,8 +288,8 @@ window.addEventListener('load', () => {
   iframe.style.cssText = 'width:100%;height:500px;border:none;border-radius:0.5rem;overflow:auto;display:block';
 
   const saveBtn = document.createElement('button');
-  saveBtn.className = 'text-zinc-500 hover:text-emerald-400 text-xs mt-1 transition-colors';
-  saveBtn.textContent = 'Save as template';
+  saveBtn.className = 'bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold px-3 py-1 rounded mt-1 transition-colors';
+  saveBtn.textContent = 'Save as Template';
   saveBtn.addEventListener('click', async () => {
     const name = prompt('Template name:');
     if (!name) return;
@@ -302,7 +302,7 @@ window.addEventListener('load', () => {
         body: JSON.stringify({ name, type: applet.type, html: applet.html }),
       });
       saveBtn.textContent = 'Saved \u2713';
-      saveBtn.className = 'text-emerald-500 text-xs mt-1';
+      saveBtn.className = 'bg-emerald-600 text-white text-xs font-bold px-3 py-1 rounded mt-1';
       refreshTemplates();
     } catch {
       saveBtn.textContent = 'Save failed';
