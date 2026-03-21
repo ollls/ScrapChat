@@ -12,6 +12,33 @@
   <link rel="stylesheet" href="/lib/flatpickr-dark.css">
   <link rel="stylesheet" href="/css/output.css">
   <style>
+    /* Session button colors — easy to tweak */
+    :root {
+      --btn-blue:  #4f46e5;   /* indigo-600 */
+      --btn-cyan:  #0891b2;   /* cyan-600 */
+      --btn-amber: #FFC107;   /* amber */
+      --btn-coral: #FF7043;   /* coral */
+      --btn-sgreen: #607D6B; /* slate green */
+    }
+    .session-btn:hover { filter: brightness(1.2); }
+    .session-btn { position: relative; }
+    .session-btn[data-tip]:hover::after {
+      content: attr(data-tip);
+      position: absolute;
+      top: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #27272a;
+      color: #d4d4d8;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 100;
+      border: 1px solid #3f3f46;
+    }
+
     /* Flatpickr zinc/indigo overrides */
     .flatpickr-calendar { background: #1c1c22 !important; border-color: #3f3f46 !important; font-size: 13px; }
     .flatpickr-months .flatpickr-month { background: #1c1c22 !important; }
@@ -31,25 +58,32 @@
     .flatpickr-calendar.static { position: relative !important; margin-top: 4px; }
   </style>
 </head>
-<body class="bg-zinc-950 text-zinc-100 h-screen flex overflow-hidden">
+<body class="bg-zinc-950 text-zinc-100 h-screen flex flex-col overflow-hidden">
 
-  <!-- Sidebar -->
-  <aside id="sidebar" class="w-72 border-r border-zinc-800 flex flex-col bg-zinc-950 shrink-0">
-    <div class="px-4 py-4 border-b border-zinc-800">
-      <button id="new-chat-btn"
-        class="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-        + New Chat
-      </button>
+  <!-- Top bar (full width) -->
+  <header id="status-bar" class="border-b border-zinc-800 px-4 py-2 flex items-center gap-4 text-xs shrink-0">
+    <!-- Session buttons -->
+    <div class="flex items-center gap-1.5 mr-2">
+      <button id="new-chat-blue"
+        class="session-btn text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+        data-session="blue" style="background:var(--btn-blue);">+</button>
+      <button id="new-chat-cyan"
+        class="session-btn text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+        data-session="cyan" style="background:var(--btn-cyan);">+</button>
+      <button id="new-chat-amber"
+        class="session-btn text-xs font-medium px-3 py-1.5 rounded transition-colors"
+        data-session="amber" style="background:var(--btn-amber); color:#000;">+</button>
+      <button id="new-chat-coral"
+        class="session-btn text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+        data-session="coral" style="background:var(--btn-coral);">+</button>
+      <button id="new-chat-sgreen"
+        class="session-btn text-white text-xs font-medium px-3 py-1.5 rounded transition-colors"
+        data-session="sgreen" style="background:var(--btn-sgreen);">+</button>
     </div>
-    <div id="conversation-list" class="flex-1 overflow-y-auto slim-scrollbar">
-    </div>
-  </aside>
-
-  <!-- Main area -->
-  <div class="flex-1 flex flex-col min-w-0">
-
-    <!-- Status bar -->
-    <header id="status-bar" class="border-b border-zinc-800 px-4 py-2 flex items-center gap-4 text-xs">
+    <div class="w-px self-stretch bg-zinc-700"></div>
+    <!-- Status indicators: grid layout -->
+    <div class="grid gap-x-8 gap-y-0.5" style="grid-template-columns: minmax(7rem, auto) minmax(5rem, auto) auto">
+      <!-- Row 1: Core -->
       <div class="relative flex items-center gap-2">
         <span id="llm-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <button id="llm-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1">
@@ -63,6 +97,14 @@
         <span id="inet-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <span id="inet-label" class="text-zinc-500">Internet</span>
       </div>
+      <div id="etrade-status" class="relative flex items-center gap-2 hidden">
+        <span id="etrade-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
+        <button id="etrade-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors">E*TRADE</button>
+        <div id="etrade-panel" class="hidden absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg p-3 z-50 min-w-[260px]">
+          <div id="etrade-panel-content"></div>
+        </div>
+      </div>
+      <!-- Row 2: APIs -->
       <div class="relative flex items-center gap-2">
         <span id="search-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <button id="search-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors flex items-center gap-1">
@@ -76,16 +118,6 @@
         <span id="liteapi-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
         <span id="liteapi-label" class="text-zinc-500">LiteAPI</span>
       </div>
-      <div id="etrade-status" class="relative flex items-center gap-2 hidden">
-        <span id="etrade-dot" class="inline-block w-2 h-2 rounded-full bg-zinc-600"></span>
-        <button id="etrade-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors">E*TRADE</button>
-        <div id="etrade-panel" class="hidden absolute top-full left-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg p-3 z-50 min-w-[260px]">
-          <div id="etrade-panel-content"></div>
-        </div>
-      </div>
-      <button id="slots-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors hidden">
-        Slots: <span id="slots-summary">—</span>
-      </button>
       <div class="relative flex items-center gap-2">
         <button id="tool-usage-toggle" class="text-zinc-600 hover:text-zinc-400 transition-colors flex items-center gap-1 hidden">
           <span>🔧</span>
@@ -94,6 +126,7 @@
         <div id="tool-usage-dropdown" class="hidden absolute top-full right-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg py-1 z-50 min-w-[160px]">
         </div>
       </div>
+    </div>
       <div class="ml-auto mr-10 flex items-center gap-6">
         <div class="relative flex items-center">
           <button id="tools-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Tools</button>
@@ -103,25 +136,48 @@
         </div>
         <div class="relative flex items-center">
           <button id="prompts-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Prompts</button>
-          <div id="prompts-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
+          <div id="prompts-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-[80vh] overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
             <div id="prompt-list" class="py-1"></div>
           </div>
         </div>
         <div class="relative flex items-center">
-          <button id="templates-toggle" class="text-rose-400 hover:text-rose-300 transition-colors text-xs">Templates</button>
-          <div id="templates-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
+          <button id="sessions-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Sessions</button>
+          <div id="sessions-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-[80vh] overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
+            <div id="session-list" class="py-1"></div>
+          </div>
+        </div>
+        <div class="relative flex items-center">
+          <button id="templates-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Templates</button>
+          <div id="templates-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-[80vh] overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
             <div id="template-list" class="py-1"></div>
           </div>
         </div>
       </div>
-      <div class="flex items-center gap-2">
-        <span class="text-zinc-500">Context:</span>
-        <div class="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">
-          <div id="context-bar" class="h-full bg-indigo-500 rounded-full transition-all" style="width: 0%"></div>
+      <div class="flex items-center gap-4">
+        <div class="flex items-center gap-2">
+          <span class="text-zinc-500">Context:</span>
+          <div class="w-32 h-2 bg-zinc-800 rounded-full overflow-hidden">
+            <div id="context-bar" class="h-full bg-indigo-500 rounded-full transition-all" style="width: 0%"></div>
+          </div>
+          <span id="context-label" class="text-zinc-500">0 / 131K</span>
+          <span id="elapsed-timer" class="text-zinc-600 text-xs hidden"></span>
         </div>
-        <span id="context-label" class="text-zinc-500">0 / 131K</span>
+        <button id="slots-toggle" class="text-zinc-500 hover:text-zinc-300 transition-colors hidden">
+          Slots: <span id="slots-summary">—</span>
+        </button>
       </div>
-    </header>
+  </header>
+
+  <!-- Content: sidebar + main -->
+  <div class="flex flex-1 overflow-hidden">
+    <!-- Sidebar -->
+    <aside id="sidebar" class="w-72 border-r border-zinc-800 flex flex-col bg-zinc-950 shrink-0">
+      <div id="conversation-list" class="flex-1 overflow-y-auto slim-scrollbar">
+      </div>
+    </aside>
+
+    <!-- Main area -->
+    <div class="flex-1 flex flex-col min-w-0">
 
     <!-- Slot panel (collapsible) -->
     <div id="slot-panel" class="border-b border-zinc-800 px-4 py-3 hidden">
@@ -155,7 +211,7 @@
       <div class="max-w-4xl mx-auto">
         <!-- Image preview strip -->
         <div id="image-preview-strip" class="hidden flex gap-2 mb-2 flex-wrap"></div>
-        <div class="flex gap-3 items-end">
+        <div class="flex gap-3 items-start">
           <input type="file" id="image-input" accept="image/*" multiple class="hidden">
           <button
             type="button"
@@ -176,11 +232,16 @@
               <input type="checkbox" id="autorun-toggle" class="accent-amber-500 w-3.5 h-3.5">
               Autorun
             </label>
+            <label id="think-toggle-label" title="Show thinking process and tool usage"
+              class="flex items-center gap-1.5 text-zinc-500 hover:text-zinc-300 transition-colors px-1 text-xs cursor-pointer select-none">
+              <input type="checkbox" id="think-toggle" class="accent-indigo-500 w-3.5 h-3.5" checked>
+              Think
+            </label>
           </div>
           <textarea
             id="prompt-input"
             name="prompt"
-            rows="2"
+            rows="4"
             placeholder="Type your message…"
             class="flex-1 bg-zinc-800 text-zinc-100 placeholder-zinc-600 resize-none outline-none text-sm leading-relaxed rounded-lg px-4 py-3 border border-zinc-700 focus:border-zinc-500 slim-scrollbar"
           ></textarea>
@@ -190,26 +251,30 @@
             title="Clear prompt"
             class="text-zinc-600 hover:text-zinc-300 transition-colors px-1 py-3 text-sm shrink-0"
           >&#10005;</button>
-          <button
-            type="submit"
-            id="send-btn"
-            class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-5 py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Send
-          </button>
-          <button
-            type="button"
-            id="save-prompt-btn"
-            title="Save as prompt"
-            class="bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-sm font-medium px-3 py-3 rounded-lg transition-colors"
-          >
-            Save
-          </button>
+          <div class="flex flex-col gap-1.5">
+            <button
+              type="submit"
+              id="send-btn"
+              class="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-5 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >Send</button>
+            <button
+              type="button"
+              id="save-prompt-btn"
+              title="Save as prompt"
+              class="bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-sm font-medium px-3 py-2 rounded-lg transition-colors"
+            >Save Prompt</button>
+            <button
+              type="button"
+              id="save-session-btn"
+              title="Save session"
+              class="bg-zinc-700 hover:bg-zinc-600 text-zinc-300 text-sm font-medium px-3 py-2 rounded-lg transition-colors"
+            >Save Session</button>
+          </div>
         </div>
       </div>
     </form>
-  </div>
-
+    </div><!-- /main area -->
+  </div><!-- /content wrapper -->
 
 </body>
 <script src="/lib/flatpickr.min.js"></script>

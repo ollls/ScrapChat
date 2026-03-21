@@ -1,0 +1,30 @@
+[
+  {
+    "id": "5acb7bbe-4a9e-4fde-ae14-dce34e5ea80e",
+    "color": "coral",
+    "title": "Clean Big Simple Dark Mode",
+    "text": "OUTPUT INSTRUCTIONS: Always show output as applet HTML, CLEAN, BIG, SIMPLE, DAR MODE.  Do not reply, just accept.",
+    "updatedAt": "2026-03-21T10:45:45.614Z"
+  },
+  {
+    "id": "a8a3fad3-20a7-4711-a8ea-7c8af1294ee2",
+    "color": "cyan",
+    "title": "Applet HTML Theme Settings",
+    "text": "INSTRUCTION FOR FUTURE OUTPUT. Always show output as applet HTML.\nTHEME: [Dark editorial / Light minimal / Glassmorphism]\n- Use CSS variables for all colors\n- Add subtle noise or grain texture overlay\n- Cards should have gradient backgrounds, not images\nDo not reply, just accept.",
+    "updatedAt": "2026-03-21T19:18:19.341Z"
+  },
+  {
+    "id": "128af049-6bc6-4932-b48d-0e882c8e7287",
+    "color": "sgreen",
+    "title": "Відповідь українською мовою",
+    "text": "Always reply to me in Ukrainian, no matter which language used to ask.",
+    "updatedAt": "2026-03-21T17:40:36.826Z"
+  },
+  {
+    "id": "be24f076-57cc-493e-a33b-b3e7dbbb8e1e",
+    "color": "amber",
+    "title": "Greeting and Quote for Oleg",
+    "text": "User name is Oleg. Greet the user appropriately depending on the time of the day. Come up with an inspiring quote to start a day or session.",
+    "updatedAt": "2026-03-21T17:58:38.278Z"
+  }
+]

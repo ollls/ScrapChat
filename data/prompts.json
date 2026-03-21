@@ -1,9 +1,39 @@
 [
   {
+    "id": "0f0acedf-56d5-4d5a-a059-05526682281b",
+    "title": "Next Week Put Options by Volume",
+    "text": "Show {$Tickler} PUT options for {$Tickler} shares for next week. Filter out by volume.  Use [template: Next Week Options]",
+    "createdAt": "2026-03-21T16:35:14.581Z"
+  },
+  {
     "id": "3b4f52f6-4e50-406b-be23-12263d01a513",
     "title": "Next Week Call Options by Volume",
     "text": "Show {$Tickler} CALL options for {$Tickler} shares for next week. Filter out by volume.  Use [template: Next Week Options]",
     "createdAt": "2026-03-21T04:41:20.145Z"
+  },
+  {
+    "id": "feae15c2-5e72-4801-ad9b-043b3984862d",
+    "title": "NEWSROOM: Single-file HTML news dashboard",
+    "text": "Build a single-file applet HTML news dashboard with these specs:\n\nLAYOUT\n- Magazine-style card grid with 3 tiers:\n  1. Breaking News — 1 hero card (large) + 1–2 standard cards, 2-column grid\n  2. Major Stories — 3-column grid of medium cards\n  3. International — 4-column compact card grid\n- Sticky header with logo, live clock, and \"LIVE\" indicator\n- Market ticker bar below header\n\nTHEME: [Dark editorial / Light minimal / Glassmorphism]\n- Use CSS variables for all colors\n- Add subtle noise or grain texture overlay\n- Cards should have gradient backgrounds, not images\n\nFEATURES\n- Category filter pills: All, Politics, Tech, Business, World, Science, Sports\n  (single-select, \"All\" is default)\n- Each card shows: category badge (color-coded), source badge (icon + name),\n  title, excerpt, timestamp\n- Breaking cards get a pulsing red \"BREAKING\" badge with animation\n- Cards animate in with staggered fade-up on load and filter change\n\nDATA\n- Use a hardcoded JS array of 15–18 sample news objects with fields:\n  tier, category, source, title, excerpt, time, live (boolean)\n- Render everything client-side with vanilla JS (no frameworks)\n\nSTYLE RULES\n- Use 2 Google Fonts: a serif display font for titles, a sans-serif for body\n- No generic fonts (Inter, Arial, Roboto)\n- Responsive: collapse to single column on mobile\n- Smooth transitions on hover (lift + shadow)\n\nOutput a single self-contained HTML file. No external dependencies\nexcept Google Fonts CDN.",
+    "createdAt": "2026-03-21T18:57:04.909Z"
+  },
+  {
+    "id": "5bbfab15-8ead-4556-a675-7476020fd86f",
+    "title": "Computer System Dashboard Applet",
+    "text": "Create system dashboard, hardware , OS, hard disk, peripherals, all GPU's of my computer, show in applet HTML BIG, CLEAN, SIMPLE, Dark mode.",
+    "createdAt": "2026-03-21T18:32:29.283Z"
+  },
+  {
+    "id": "6ce60c3e-b1f6-4204-98e0-f9bb5039a3d3",
+    "title": "Etrade Account Balances Display",
+    "text": "Show my ETRADE accounts balances, show output as applet HTML, CLEAN, BIG, SIMPLE, DARK MODE.",
+    "createdAt": "2026-03-21T17:46:35.394Z"
+  },
+  {
+    "id": "36ec5444-5517-4b74-b567-939413f0f80d",
+    "title": "Show Tickler Put Options Next Week",
+    "text": "Show {$Tickler} PUT options for {$Tickler} shares for next week. Filter out by volume.  Use [template: Next Week Options]",
+    "createdAt": "2026-03-21T16:32:31.609Z"
   },
   {
     "id": "1e435b0b-ec60-4be5-a75f-eccabfc361de",
@@ -16,11 +46,5 @@
     "title": "ETRADE Balance View with HTML Applet",
     "text": "Show my ETRADE accounts balances, use HTML applet and best look and feel practices.",
     "createdAt": "2026-03-20T20:31:00.634Z"
-  },
-  {
-    "id": "a1049dc5-d280-487b-9929-77f1cf4413aa",
-    "title": "Generate AMD Option Chain Dashboard",
-    "text": "Use HTML applet: Generate option chain dashboard for AMD stock. Dashboard should let me to select expiry date and type: PUT or CALL, once selected it will load relevant file and display option chain strikes and greeks. DO NOT embed data into frame, each time user selects expiry date, load that file and render it. Use etrade tool to download data. Use list_files to validate presence of the files before applet code generation. match the correct filename pattern,  filter by CASE INSESITIVE CALL or PUT from the CSV data itself rather than expecting separate files. Use best practicies for Look and Feel.",
-    "createdAt": "2026-03-20T21:48:29.128Z"
   }
 ]

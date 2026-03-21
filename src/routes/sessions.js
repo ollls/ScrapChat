@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { listPrompts, createPrompt, deletePrompt, updatePrompt, reorderPrompts } from '../services/prompts.js';
+import { listSessions, upsertSession, updateSession, deleteSession, reorderSessions } from '../services/sessions.js';
 import { collectChatCompletion } from '../services/llm.js';
 
 const router = Router();
@@ -12,39 +12,34 @@ async function generateTitle(text) {
     ], { signal: AbortSignal.timeout(30000), maxTokens: 200 });
     let title = raw?.trim();
     if (title) {
-      // Strip Qwen3 think blocks if present
       title = title.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       // Strip any HTML tags the LLM may have emitted
       title = title.replace(/<[^>]*>/g, '').trim();
-      // Detect system prompt leak or HTML output
-      if (/title the following|reply with|nothing else|doctype|<!|<html|^error:|conflict|cannot|i can'?t/i.test(title)) {
-        title = '';
-      }
+      if (/title the following|reply with|nothing else|doctype|<!|<html|^error:|conflict|cannot|i can'?t/i.test(title)) title = '';
     }
     if (title) {
       title = title.replace(/^["']|["']$/g, '').trim();
       if (title.length > 60) title = title.slice(0, 60);
       if (title) return title;
     }
-    console.warn('generateTitle: no usable content in LLM response. raw:', JSON.stringify(raw));
+    console.warn('generateTitle (session): no usable content. raw:', JSON.stringify(raw));
   } catch (err) {
-    console.warn('generateTitle failed:', err.message, err.cause || '');
+    console.warn('generateTitle (session) failed:', err.message, err.cause || '');
   }
-  // Fallback: first meaningful sentence fragment, truncated
-  const fallback = text.replace(/^you are [^.]*\.\s*/i, '').trim();
-  const short = fallback.slice(0, 50).replace(/\s+\S*$/, '');
+  const short = text.slice(0, 50).replace(/\s+\S*$/, '');
   return short || text.slice(0, 40);
 }
 
 router.get('/', (_req, res) => {
-  res.json(listPrompts());
+  res.json(listSessions());
 });
 
 router.post('/', async (req, res) => {
-  const { text } = req.body;
+  const { text, color } = req.body;
   if (!text?.trim()) return res.status(400).json({ error: 'text required' });
+  if (!color?.trim()) return res.status(400).json({ error: 'color required' });
   const title = await generateTitle(text.trim());
-  res.json(createPrompt(text.trim(), title));
+  res.json(upsertSession(color.trim(), text.trim(), title));
 });
 
 router.patch('/:id', (req, res) => {
@@ -53,19 +48,19 @@ router.patch('/:id', (req, res) => {
   const updates = {};
   if (text?.trim()) updates.text = text.trim();
   if (title?.trim()) updates.title = title.trim();
-  const prompt = updatePrompt(req.params.id, updates);
-  if (!prompt) return res.status(404).json({ error: 'not found' });
-  res.json(prompt);
+  const session = updateSession(req.params.id, updates);
+  if (!session) return res.status(404).json({ error: 'not found' });
+  res.json(session);
 });
 
 router.put('/reorder', (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids)) return res.status(400).json({ error: 'ids array required' });
-  res.json(reorderPrompts(ids));
+  res.json(reorderSessions(ids));
 });
 
 router.delete('/:id', (req, res) => {
-  deletePrompt(req.params.id);
+  deleteSession(req.params.id);
   res.json({ ok: true });
 });
 

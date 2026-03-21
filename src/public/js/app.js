@@ -1,6 +1,6 @@
 // ── State ──────────────────────────────────────────────
 const state = {
-  currentConversationId: null,
+  currentConversationId: localStorage.getItem('activeConversationId') || null,
   conversations: [],
   abortController: null,
   healthy: false,
@@ -8,11 +8,53 @@ const state = {
   pendingImages: [], // { dataUrl, mimeType, name }
   appletsEnabled: localStorage.getItem('appletsEnabled') !== 'false', // default true
   autorunEnabled: localStorage.getItem('autorunEnabled') === 'true', // default false
+  thinkEnabled: localStorage.getItem('thinkEnabled') !== 'false', // default true
+  sessionType: null, // current session color: 'blue'|'cyan'|'amber'|'coral'|'sgreen'
+  sessionColors: JSON.parse(localStorage.getItem('sessionColors') || '{}'), // convId → sessionType
+  location: '', // from server config (LOCATION env var)
 };
+
+let _elapsedInterval = null;
+function startElapsedTimer() {
+  const t0 = Date.now();
+  elapsedTimer.classList.remove('hidden');
+  elapsedTimer.textContent = '0s';
+  clearInterval(_elapsedInterval);
+  _elapsedInterval = setInterval(() => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    elapsedTimer.textContent = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  }, 1000);
+}
+function stopElapsedTimer() {
+  clearInterval(_elapsedInterval);
+  _elapsedInterval = null;
+}
+
+function flashMsg(text) {
+  let el = document.getElementById('flash-msg');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'flash-msg';
+    el.className = 'text-red-500 text-sm mt-2 transition-opacity duration-300';
+    document.getElementById('empty-state').appendChild(el);
+  }
+  el.textContent = text;
+  el.style.opacity = '1';
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => { el.style.opacity = '0'; }, 2000);
+}
+
+function requireSession() {
+  if (!state.currentConversationId || !state.sessionType) {
+    flashMsg('Create a session first');
+    return false;
+  }
+  return true;
+}
 
 // ── DOM refs ──────────────────────────────────────────
 const sidebar = document.getElementById('conversation-list');
-const newChatBtn = document.getElementById('new-chat-btn');
+const newChatButtons = document.querySelectorAll('.session-btn');
 const responseArea = document.getElementById('response-area');
 const emptyState = document.getElementById('empty-state');
 const form = document.getElementById('prompt-form');
@@ -28,6 +70,7 @@ const slotPanel = document.getElementById('slot-panel');
 const slotCards = document.getElementById('slot-cards');
 const contextBar = document.getElementById('context-bar');
 const contextLabel = document.getElementById('context-label');
+const elapsedTimer = document.getElementById('elapsed-timer');
 const inetDot = document.getElementById('inet-dot');
 const inetLabel = document.getElementById('inet-label');
 const searchDot = document.getElementById('search-dot');
@@ -50,7 +93,12 @@ const attachBtn = document.getElementById('attach-btn');
 const imagePreviewStrip = document.getElementById('image-preview-strip');
 const appletToggle = document.getElementById('applet-toggle');
 const autorunToggle = document.getElementById('autorun-toggle');
+const thinkToggle = document.getElementById('think-toggle');
 const savePromptBtn = document.getElementById('save-prompt-btn');
+const saveSessionBtn = document.getElementById('save-session-btn');
+const sessionList = document.getElementById('session-list');
+const sessionsToggle = document.getElementById('sessions-toggle');
+const sessionsDropdown = document.getElementById('sessions-dropdown');
 const clearPromptBtn = document.getElementById('clear-prompt-btn');
 const promptList = document.getElementById('prompt-list');
 const promptsToggle = document.getElementById('prompts-toggle');
@@ -133,6 +181,11 @@ function renderSidebar() {
     const title = document.createElement('span');
     title.className = 'flex-1 text-sm truncate ' + (isActive ? 'text-zinc-100' : 'text-zinc-400');
     title.textContent = conv.title;
+    const convSession = state.sessionColors[conv.id];
+    if (convSession) {
+      const c = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${convSession}`).trim();
+      if (c) title.style.color = c;
+    }
 
     const delBtn = document.createElement('button');
     delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
@@ -168,6 +221,13 @@ async function switchConversation(id) {
   if (state.abortController) state.abortController.abort();
 
   state.currentConversationId = id;
+  persistActiveConversation();
+  // Restore session color for this conversation
+  const savedType = state.sessionColors[id] || null;
+  state.sessionType = savedType;
+  const color = savedType ? getComputedStyle(document.documentElement).getPropertyValue(`--btn-${savedType}`).trim() : '';
+  input.style.borderColor = color || '';
+  updateInputLock();
   renderSidebar();
 
   const conv = await api.getConversation(id);
@@ -177,8 +237,14 @@ async function switchConversation(id) {
 
 async function deleteConversation(id) {
   await api.deleteConversation(id);
+  delete state.sessionColors[id];
+  localStorage.setItem('sessionColors', JSON.stringify(state.sessionColors));
   if (state.currentConversationId === id) {
     state.currentConversationId = null;
+    state.sessionType = null;
+    input.style.borderColor = '';
+    persistActiveConversation();
+    updateInputLock();
     showEmptyState();
   }
   refreshSidebar();
@@ -240,8 +306,8 @@ function extractApplets(text) {
 function createAppletIframe(applet) {
   let html = applet.html;
 
-  // Validate: must contain <script>, <svg>, or <canvas>
-  if (!/<script[\s>]|<svg[\s>]|<canvas[\s>]/i.test(html)) {
+  // Validate: html type applets are always valid; others need <script>, <svg>, or <canvas>
+  if (applet.type !== 'html' && !/<script[\s>]|<svg[\s>]|<canvas[\s>]/i.test(html)) {
     // Fallback: collapsible code block
     const details = document.createElement('details');
     details.className = 'applet-fallback';
@@ -569,8 +635,8 @@ function appendMessage(role, text, images, meta = {}) {
 
   if (role === 'assistant' && text) {
     const contentSpan = document.createElement('span');
-    renderFormattedContent(text, contentSpan, { renderMermaid: true });
     bubble.appendChild(contentSpan);
+    renderFormattedContent(text, contentSpan, { renderMermaid: true });
   } else if (text) {
     const textNode = document.createTextNode(text);
     bubble.appendChild(textNode);
@@ -582,12 +648,14 @@ function appendMessage(role, text, images, meta = {}) {
 }
 
 // ── Streaming ─────────────────────────────────────────
-async function sendMessage(content, images) {
+async function sendMessage(content, images, { hideUserMessage = false } = {}) {
   if (!state.currentConversationId) return;
 
-  appendMessage('user', content, images);
+  state._hiddenMessage = hideUserMessage;
+  if (!hideUserMessage) appendMessage('user', content, images);
   const bubble = appendMessage('assistant', '');
   sendBtn.disabled = true;
+  startElapsedTimer();
 
   // Create a collapsed reasoning block inside the bubble
   const reasoningDetails = document.createElement('details');
@@ -626,10 +694,12 @@ async function sendMessage(content, images) {
         images: images ? images.map(i => ({ mimeType: i.mimeType, base64: i.base64 })) : undefined,
         applets: state.appletsEnabled,
         autorun: state.autorunEnabled,
+        hidden: state._hiddenMessage || false,
       }),
       signal: state.abortController.signal,
     });
 
+    state._hiddenMessage = false;
     // Refresh slots shortly after backend assigns slot
     setTimeout(refreshSlots, 500);
 
@@ -652,7 +722,7 @@ async function sendMessage(content, images) {
           if (payload === '[DONE]') continue;
           try {
             const data = JSON.parse(payload);
-            if (data.reasoning) {
+            if (data.reasoning && state.thinkEnabled) {
               if (!hasReasoning) {
                 hasReasoning = true;
                 bubble.insertBefore(reasoningDetails, contentSpan);
@@ -661,7 +731,7 @@ async function sendMessage(content, images) {
               reasoningBody.textContent = accumulatedReasoning;
               responseArea.scrollTop = responseArea.scrollHeight;
             }
-            if (data.tool_content) {
+            if (data.tool_content && state.thinkEnabled) {
               // Show LLM's text during tool rounds so user knows it's not hung
               if (!hasToolUse) {
                 hasToolUse = true;
@@ -681,7 +751,7 @@ async function sendMessage(content, images) {
               toolUseContainer._thinkingEl.textContent += data.tool_content;
               responseArea.scrollTop = responseArea.scrollHeight;
             }
-            if (data.tool_status) {
+            if (data.tool_status && state.thinkEnabled) {
               // Show inline status for slow operations (prebook, book, cancel)
               if (!hasToolUse) {
                 hasToolUse = true;
@@ -705,6 +775,9 @@ async function sendMessage(content, images) {
                 delete toolUseContainer._thinkingEl;
               }
               trackToolUse(data.tool_use.name);
+              if (!state.thinkEnabled) {
+                // Skip rendering tool use details
+              } else {
               if (!hasToolUse) {
                 hasToolUse = true;
                 bubble.insertBefore(toolUseContainer, contentSpan);
@@ -792,7 +865,8 @@ async function sendMessage(content, images) {
               const dl = makeFileDownloadLink(data.tool_use.name, data.tool_use.result);
               if (dl) toolUseContainer.appendChild(dl);
               responseArea.scrollTop = responseArea.scrollHeight;
-            }
+            } // end else (thinkEnabled)
+            } // end if (data.tool_use)
             if (data.confirm_command) {
               if (!hasToolUse) {
                 hasToolUse = true;
@@ -859,6 +933,7 @@ async function sendMessage(content, images) {
     }
   } finally {
     clearTimeout(_renderTimer);
+    stopElapsedTimer();
     if (accumulated) renderFormattedContent(accumulated, contentSpan, { renderMermaid: true });
     state.abortController = null;
     sendBtn.disabled = false;
@@ -1282,28 +1357,82 @@ slotsToggle.addEventListener('click', () => {
   if (slotPanelOpen) refreshSlots();
 });
 
+// ── Session color helpers ─────────────────────────────
+function applySessionColor(type) {
+  state.sessionType = type;
+  // Persist color for current conversation
+  if (state.currentConversationId && type) {
+    state.sessionColors[state.currentConversationId] = type;
+    localStorage.setItem('sessionColors', JSON.stringify(state.sessionColors));
+  }
+  const color = type ? getComputedStyle(document.documentElement).getPropertyValue(`--btn-${type}`).trim() : '';
+  input.style.borderColor = color || '';
+  updateInputLock();
+  renderSidebar();
+}
+
+function persistActiveConversation() {
+  if (state.currentConversationId) {
+    localStorage.setItem('activeConversationId', state.currentConversationId);
+  } else {
+    localStorage.removeItem('activeConversationId');
+  }
+}
+
+function updateInputLock() {
+  const locked = !state.currentConversationId || !state.sessionType;
+  input.disabled = locked;
+  sendBtn.disabled = locked;
+  input.placeholder = locked ? 'Select or create a session to start…' : 'Type your message…';
+}
+
 // ── Event handlers ────────────────────────────────────
-newChatBtn.addEventListener('click', async () => {
-  const conv = await api.createConversation();
-  state.currentConversationId = conv.id;
-  await refreshSidebar();
-  renderMessages([]);
-  updateContextBar(0);
-  input.focus();
+newChatButtons.forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const sessionType = btn.dataset.session;
+    const conv = await api.createConversation();
+    state.currentConversationId = conv.id;
+    persistActiveConversation();
+    applySessionColor(sessionType);
+    await refreshSidebar();
+    renderMessages([]);
+    updateContextBar(0);
+
+    // Auto-load and submit saved session prompt for this color
+    try {
+      const sessions = await (await fetch('/api/sessions')).json();
+      const match = sessions.find(s => s.color === sessionType);
+      if (match) {
+        const vars = extractPromptVariables(match.text);
+        // Disable Think for session init prompt
+        const wasThinkEnabled = state.thinkEnabled;
+        state.thinkEnabled = false;
+        thinkToggle.checked = false;
+        if (vars.length > 0) {
+          showPromptVarsModal(match.text, vars);
+          const modal = document.getElementById('prompt-vars-modal');
+          modal._restoreThink = wasThinkEnabled;
+        } else {
+          const text = expandPromptMacros(match.text);
+          await sendMessage(text, null, { hideUserMessage: true });
+          state.thinkEnabled = wasThinkEnabled;
+          thinkToggle.checked = wasThinkEnabled;
+          return;
+        }
+      }
+    } catch {}
+
+    input.focus();
+  });
 });
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
+  // Must have an active session to send
+  if (!requireSession()) return;
   const content = input.value.trim();
   const images = state.pendingImages.length > 0 ? [...state.pendingImages] : null;
   if (!content && !images) return;
-  if (!state.currentConversationId) {
-    const conv = await api.createConversation();
-    state.currentConversationId = conv.id;
-    await refreshSidebar();
-    renderMessages([]);
-    updateContextBar(0);
-  }
   input.value = '';
   input.style.height = 'auto';
   clearPendingImages();
@@ -1385,6 +1514,13 @@ autorunToggle.addEventListener('change', () => {
   localStorage.setItem('autorunEnabled', state.autorunEnabled);
 });
 
+// Think toggle
+thinkToggle.checked = state.thinkEnabled;
+thinkToggle.addEventListener('change', () => {
+  state.thinkEnabled = thinkToggle.checked;
+  localStorage.setItem('thinkEnabled', state.thinkEnabled);
+});
+
 imageInput.addEventListener('change', () => {
   for (const file of imageInput.files) {
     addPendingImage(file);
@@ -1427,6 +1563,7 @@ promptsToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   toolsDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
+  sessionsDropdown.classList.add('hidden');
   promptsDropdown.classList.toggle('hidden');
 });
 promptsDropdown.addEventListener('click', (e) => e.stopPropagation());
@@ -1437,10 +1574,167 @@ templatesToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   promptsDropdown.classList.add('hidden');
   toolsDropdown.classList.add('hidden');
+  sessionsDropdown.classList.add('hidden');
   templatesDropdown.classList.toggle('hidden');
   if (!templatesDropdown.classList.contains('hidden')) refreshTemplates();
 });
 templatesDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Sessions dropdown ──────────────────────────────────
+sessionsToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  promptsDropdown.classList.add('hidden');
+  toolsDropdown.classList.add('hidden');
+  templatesDropdown.classList.add('hidden');
+  sessionsDropdown.classList.toggle('hidden');
+  if (!sessionsDropdown.classList.contains('hidden')) refreshSessions();
+});
+sessionsDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+function startTitleEdit(titleSpan, onSave) {
+  const orig = titleSpan.textContent;
+  titleSpan.contentEditable = 'true';
+  titleSpan.classList.add('bg-zinc-800', 'rounded', 'px-1', 'outline-none', 'ring-1', 'ring-zinc-600');
+  titleSpan.focus();
+  const range = document.createRange();
+  range.selectNodeContents(titleSpan);
+  range.collapse(false);
+  getSelection().removeAllRanges();
+  getSelection().addRange(range);
+
+  const finish = (save) => {
+    titleSpan.contentEditable = 'false';
+    titleSpan.classList.remove('bg-zinc-800', 'rounded', 'px-1', 'outline-none', 'ring-1', 'ring-zinc-600');
+    const newTitle = titleSpan.textContent.trim();
+    if (save && newTitle && newTitle !== orig) {
+      onSave(newTitle);
+    } else {
+      titleSpan.textContent = orig;
+    }
+  };
+  titleSpan.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+  titleSpan.addEventListener('blur', () => finish(true), { once: true });
+  titleSpan.addEventListener('click', (e) => e.stopPropagation());
+}
+
+function renderSessions(sessions) {
+  sessionList.innerHTML = '';
+  let dragSrcEl = null;
+
+  for (const s of sessions) {
+    const item = document.createElement('div');
+    item.className = 'group flex items-center gap-1 px-3 py-2 cursor-pointer border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors';
+    item.dataset.id = s.id;
+
+    const grip = document.createElement('span');
+    grip.className = 'cursor-grab text-zinc-600 hover:text-zinc-400 text-xs select-none shrink-0';
+    grip.textContent = '⠿';
+    grip.addEventListener('mousedown', () => { item.draggable = true; });
+    grip.addEventListener('mouseup', () => { item.draggable = false; });
+
+    item.addEventListener('dragstart', (e) => {
+      dragSrcEl = item;
+      item.style.opacity = '0.4';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    item.addEventListener('dragend', () => {
+      item.style.opacity = '1';
+      item.draggable = false;
+      dragSrcEl = null;
+      sessionList.querySelectorAll('[data-id]').forEach(el => el.classList.remove('border-t-indigo-500'));
+    });
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      item.classList.add('border-t-indigo-500');
+    });
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('border-t-indigo-500');
+    });
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      item.classList.remove('border-t-indigo-500');
+      if (dragSrcEl === item) return;
+      sessionList.insertBefore(dragSrcEl, item);
+      const ids = [...sessionList.querySelectorAll('[data-id]')].map(el => el.dataset.id);
+      await fetch('/api/sessions/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+    });
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'flex-1 text-xs';
+    titleSpan.textContent = s.title || s.text.slice(0, 60);
+    const cssVar = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${s.color}`).trim();
+    if (cssVar) titleSpan.style.color = cssVar;
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'text-zinc-600 hover:text-zinc-300 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    editBtn.textContent = '✎';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startTitleEdit(titleSpan, async (newTitle) => {
+        await fetch(`/api/sessions/${s.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+      });
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await fetch(`/api/sessions/${s.id}`, { method: 'DELETE' });
+      refreshSessions();
+    });
+
+    item.addEventListener('click', () => {
+      sessionsDropdown.classList.add('hidden');
+      if (!requireSession()) return;
+      const vars = extractPromptVariables(s.text);
+      if (vars.length > 0) {
+        showPromptVarsModal(s.text, vars);
+      } else {
+        input.value = expandPromptMacros(s.text);
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+        input.focus();
+      }
+    });
+
+    item.appendChild(grip);
+    item.appendChild(titleSpan);
+    item.appendChild(editBtn);
+    item.appendChild(delBtn);
+    sessionList.appendChild(item);
+  }
+}
+
+async function refreshSessions() {
+  try {
+    const sessions = await (await fetch('/api/sessions')).json();
+    renderSessions(sessions);
+    // Update session button tooltips
+    for (const btn of newChatButtons) {
+      const color = btn.dataset.session;
+      const match = sessions.find(s => s.color === color);
+      if (match) {
+        btn.dataset.tip = match.title || match.text.slice(0, 60);
+      } else {
+        delete btn.dataset.tip;
+      }
+    }
+  } catch {}
+}
 
 function renderTemplates(templates) {
   templateList.innerHTML = '';
@@ -1448,9 +1742,50 @@ function renderTemplates(templates) {
     templateList.innerHTML = '<div class="px-3 py-2 text-xs text-zinc-500">No templates saved yet</div>';
     return;
   }
+  let dragSrcEl = null;
+
   for (const t of templates) {
     const item = document.createElement('div');
     item.className = 'group flex items-center gap-1 px-3 py-2 cursor-pointer border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors';
+    item.dataset.id = t.id;
+
+    const grip = document.createElement('span');
+    grip.className = 'cursor-grab text-zinc-600 hover:text-zinc-400 text-xs select-none shrink-0';
+    grip.textContent = '⠿';
+    grip.addEventListener('mousedown', () => { item.draggable = true; });
+    grip.addEventListener('mouseup', () => { item.draggable = false; });
+
+    item.addEventListener('dragstart', (e) => {
+      dragSrcEl = item;
+      item.style.opacity = '0.4';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    item.addEventListener('dragend', () => {
+      item.style.opacity = '1';
+      item.draggable = false;
+      dragSrcEl = null;
+      templateList.querySelectorAll('[data-id]').forEach(el => el.classList.remove('border-t-indigo-500'));
+    });
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      item.classList.add('border-t-indigo-500');
+    });
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('border-t-indigo-500');
+    });
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      item.classList.remove('border-t-indigo-500');
+      if (dragSrcEl === item) return;
+      templateList.insertBefore(dragSrcEl, item);
+      const ids = [...templateList.querySelectorAll('[data-id]')].map(el => el.dataset.id);
+      await fetch('/api/templates/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+    });
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'flex-1 text-xs text-zinc-300';
@@ -1459,6 +1794,20 @@ function renderTemplates(templates) {
     const typeSpan = document.createElement('span');
     typeSpan.className = 'text-zinc-600 text-xs shrink-0';
     typeSpan.textContent = t.type;
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'text-zinc-600 hover:text-zinc-300 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    editBtn.textContent = '✎';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startTitleEdit(nameSpan, async (newName) => {
+        await fetch(`/api/templates/${t.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName }),
+        });
+      });
+    });
 
     const delBtn = document.createElement('button');
     delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
@@ -1470,6 +1819,7 @@ function renderTemplates(templates) {
     });
 
     item.addEventListener('click', () => {
+      if (!requireSession()) return;
       const tag = `[template: ${t.name}]`;
       const pos = input.selectionStart || input.value.length;
       input.value = input.value.slice(0, pos) + tag + input.value.slice(pos);
@@ -1479,8 +1829,10 @@ function renderTemplates(templates) {
       templatesDropdown.classList.add('hidden');
     });
 
+    item.appendChild(grip);
     item.appendChild(nameSpan);
     item.appendChild(typeSpan);
+    item.appendChild(editBtn);
     item.appendChild(delBtn);
     templateList.appendChild(item);
   }
@@ -1497,12 +1849,15 @@ document.addEventListener('click', (e) => {
   if (e.target !== promptsToggle) promptsDropdown.classList.add('hidden');
   if (e.target !== toolsToggle) toolsDropdown.classList.add('hidden');
   if (e.target !== templatesToggle) templatesDropdown.classList.add('hidden');
+  if (e.target !== sessionsToggle) sessionsDropdown.classList.add('hidden');
 });
 
 // ── Tools Panel ──────────────────────────────────────
 toolsToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   promptsDropdown.classList.add('hidden');
+  sessionsDropdown.classList.add('hidden');
+  templatesDropdown.classList.add('hidden');
   toolsDropdown.classList.toggle('hidden');
   if (!toolsDropdown.classList.contains('hidden')) refreshTools();
 });
@@ -1593,11 +1948,12 @@ function expandPromptMacros(text) {
     .replace(/\{\$time\}/gi, now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }))
     .replace(/\{\$year\}/gi, String(now.getFullYear()))
     .replace(/\{\$month\}/gi, now.toLocaleDateString('en-US', { month: 'long' }))
-    .replace(/\{\$day\}/gi, now.toLocaleDateString('en-US', { weekday: 'long' }));
+    .replace(/\{\$day\}/gi, now.toLocaleDateString('en-US', { weekday: 'long' }))
+    .replace(/\{\$location\}/gi, state.location);
 }
 
 // ── Prompt Variables ─────────────────────────────────
-const builtinMacros = new Set(['date', 'time', 'year', 'month', 'day']);
+const builtinMacros = new Set(['date', 'time', 'year', 'month', 'day', 'location']);
 
 function extractPromptVariables(text) {
   const vars = [];
@@ -1785,13 +2141,23 @@ document.getElementById('prompt-vars-submit').addEventListener('click', () => {
   const values = collectVarValues();
   let text = substituteVars(modal._promptText, modal._vars, values);
   text = expandPromptMacros(text);
-  input.value = text;
-  input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-  input.focus();
+  const restoreThink = modal._restoreThink;
   if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
   modal._flatpickrInstances = [];
+  modal._restoreThink = undefined;
   modal.classList.add('hidden');
+  if (restoreThink !== undefined) {
+    // Session init with variables — auto-submit hidden, then restore Think
+    sendMessage(text, null, { hideUserMessage: true }).then(() => {
+      state.thinkEnabled = restoreThink;
+      thinkToggle.checked = restoreThink;
+    });
+  } else if (state.currentConversationId && state.sessionType) {
+    input.value = text;
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+    input.focus();
+  }
 });
 
 // Close modal on Escape
@@ -1800,6 +2166,12 @@ document.getElementById('prompt-vars-modal').addEventListener('keydown', (e) => 
     const modal = document.getElementById('prompt-vars-modal');
     if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
     modal._flatpickrInstances = [];
+    // Restore Think if cancelled during session init
+    if (modal._restoreThink !== undefined) {
+      state.thinkEnabled = modal._restoreThink;
+      thinkToggle.checked = modal._restoreThink;
+      modal._restoreThink = undefined;
+    }
     modal.classList.add('hidden');
   }
   if (e.key === 'Enter') {
@@ -1821,9 +2193,15 @@ function renderPrompts(prompts) {
 
   for (const p of prompts) {
     const item = document.createElement('div');
-    item.className = 'group flex items-center gap-1 px-3 py-2 cursor-grab border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors';
-    item.draggable = true;
+    item.className = 'group flex items-center gap-1 px-3 py-2 border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors cursor-pointer';
     item.dataset.id = p.id;
+
+    // Drag grip handle — only this enables dragging
+    const grip = document.createElement('span');
+    grip.className = 'cursor-grab text-zinc-600 hover:text-zinc-400 text-xs select-none shrink-0';
+    grip.textContent = '⠿';
+    grip.addEventListener('mousedown', () => { item.draggable = true; });
+    grip.addEventListener('mouseup', () => { item.draggable = false; });
 
     item.addEventListener('dragstart', (e) => {
       dragSrcEl = item;
@@ -1832,6 +2210,8 @@ function renderPrompts(prompts) {
     });
     item.addEventListener('dragend', () => {
       item.style.opacity = '1';
+      item.draggable = false;
+      dragSrcEl = null;
       promptList.querySelectorAll('[data-id]').forEach(el => el.classList.remove('border-t-indigo-500'));
     });
     item.addEventListener('dragover', (e) => {
@@ -1859,6 +2239,20 @@ function renderPrompts(prompts) {
     titleSpan.className = 'flex-1 text-xs text-zinc-300';
     titleSpan.textContent = p.title || p.text.slice(0, 60);
 
+    const editBtn = document.createElement('button');
+    editBtn.className = 'text-zinc-600 hover:text-zinc-300 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    editBtn.textContent = '✎';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startTitleEdit(titleSpan, async (newTitle) => {
+        await fetch(`/api/prompts/${p.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+      });
+    });
+
     const delBtn = document.createElement('button');
     delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
     delBtn.textContent = '✕';
@@ -1869,6 +2263,7 @@ function renderPrompts(prompts) {
     });
 
     item.addEventListener('click', () => {
+      if (!requireSession()) return;
       const vars = extractPromptVariables(p.text);
       if (vars.length > 0) {
         showPromptVarsModal(p.text, vars);
@@ -1880,7 +2275,9 @@ function renderPrompts(prompts) {
       }
     });
 
+    item.appendChild(grip);
     item.appendChild(titleSpan);
+    item.appendChild(editBtn);
     item.appendChild(delBtn);
     promptList.appendChild(item);
   }
@@ -1912,10 +2309,52 @@ savePromptBtn.addEventListener('click', async () => {
   }
 });
 
+saveSessionBtn.addEventListener('click', async () => {
+  const text = input.value.trim();
+  if (!text || !state.sessionType) return;
+  saveSessionBtn.disabled = true;
+  saveSessionBtn.textContent = '…';
+  try {
+    await fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, color: state.sessionType }),
+    });
+    input.value = '';
+    input.style.height = 'auto';
+    refreshSessions();
+  } finally {
+    saveSessionBtn.disabled = false;
+    saveSessionBtn.textContent = 'Save Session';
+  }
+});
+
 // ── Init ──────────────────────────────────────────────
 (async function init() {
+  try { const cfg = await (await fetch('/api/config')).json(); state.location = cfg.location || ''; } catch {}
   await refreshSidebar();
+  // Restore active session from localStorage
+  if (state.currentConversationId) {
+    const exists = state.conversations.find(c => c.id === state.currentConversationId);
+    if (exists) {
+      const savedType = state.sessionColors[state.currentConversationId] || null;
+      state.sessionType = savedType;
+      const color = savedType ? getComputedStyle(document.documentElement).getPropertyValue(`--btn-${savedType}`).trim() : '';
+      input.style.borderColor = color || '';
+      renderSidebar();
+      const conv = await api.getConversation(state.currentConversationId);
+      renderMessages(conv.messages);
+      updateContextBar(conv.tokenCount);
+    } else {
+      // Conversation no longer exists on server
+      state.currentConversationId = null;
+      state.sessionType = null;
+      persistActiveConversation();
+    }
+  }
+  updateInputLock();
   refreshPrompts();
+  refreshSessions();
   pollLLM();
   setInterval(pollLLM, 5000);
   pollInternet();

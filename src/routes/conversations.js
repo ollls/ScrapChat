@@ -58,6 +58,7 @@ router.post('/:id/messages', async (req, res) => {
   const images = req.body.images; // [{ mimeType, base64 }]
   const applets = !!req.body.applets;
   const autorun = !!req.body.autorun;
+  const hidden = !!req.body.hidden;
   if (!content && (!images || images.length === 0)) {
     return res.status(400).json({ error: 'Content is required' });
   }
@@ -68,7 +69,7 @@ router.post('/:id/messages', async (req, res) => {
     const tpl = getTemplateByName(match[1].trim());
     if (tpl) {
       content = content.replace(match[0],
-        `\n\nUse this saved HTML applet template — output it as an <applet type="${tpl.type}"> block with ONLY the data filenames/configuration updated. Do NOT redesign the layout, styling, or structure:\n\`\`\`html\n${tpl.html}\n\`\`\``
+        `\n\nUse this saved HTML applet template — output it as an <applet type="${tpl.type}"> block. Fetch fresh data using the appropriate tools first, then populate the template with the new data. Update ALL dates, values, and content to reflect the fresh data. Keep the layout, styling, and structure intact:\n\`\`\`html\n${tpl.html}\n\`\`\``
       );
     }
   }
@@ -381,13 +382,15 @@ router.post('/:id/messages', async (req, res) => {
           continue;
         }
         // Detect bare JSON or truncated tool calls and retry the round
-        if (/\{"name"\s*:\s*"/.test(result.content)) {
+        // Skip this check if content contains applet blocks (HTML/JS may have {"name": patterns)
+        const hasApplet = /<applet[\s>]/i.test(result.content);
+        if (!hasApplet && /\{"name"\s*:\s*"/.test(result.content)) {
           console.warn(`[tool-loop] response contains bare/truncated JSON tool call but parseToolCalls found nothing. Content (last 200 chars): ...${result.content.slice(-200)}`);
           llmMessages.push({ role: 'assistant', content: result.content });
           llmMessages.push({ role: 'user', content: 'Your tool call was not wrapped in <tool_call></tool_call> tags or was truncated. Please retry with valid format:\n<tool_call>\n{"name": "tool_name", "arguments": {...}}\n</tool_call>' });
           continue;
         }
-        if (/<tool_call/i.test(result.content)) {
+        if (!hasApplet && /<tool_call/i.test(result.content)) {
           console.warn(`[tool-loop] response contains <tool_call> tag but parseToolCalls found nothing. Content (first 500 chars):\n${result.content.slice(0, 500)}`);
           // Malformed tool call — ask LLM to retry with valid JSON instead of treating as final answer
           llmMessages.push({ role: 'assistant', content: result.content });
@@ -444,7 +447,7 @@ router.post('/:id/messages', async (req, res) => {
 
     // Safety net: if finalContent still looks like a bare tool call, try parsing and executing it
     // This catches edge cases where the tool loop somehow failed to parse a valid tool call
-    if (finalContent && /\{"name"\s*:\s*"/.test(finalContent)) {
+    if (finalContent && !/<applet[\s>]/i.test(finalContent) && /\{"name"\s*:\s*"/.test(finalContent)) {
       // Strip <think> blocks that might interfere with parsing
       const stripped = finalContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       const safetyCalls = parseToolCalls(stripped);
@@ -518,14 +521,11 @@ router.post('/:id/messages', async (req, res) => {
   res.write('data: [DONE]\n\n');
   res.end();
 
-  // Auto-title from first user message
-  const updated = conversations.get(conv.id);
-  if (updated && updated.title === 'New conversation' && updated.messages.length >= 1) {
-    const firstUser = updated.messages.find(m => m.role === 'user');
-    if (firstUser) {
-      const text = typeof firstUser.content === 'object'
-        ? firstUser.content.text
-        : firstUser.content;
+  // Auto-title from first visible user message (skip hidden session prompts)
+  if (!hidden) {
+    const updated = conversations.get(conv.id);
+    if (updated && updated.title === 'New conversation') {
+      const text = typeof content === 'string' ? content : content.text;
       if (text) {
         const title = text.length > 60 ? text.slice(0, 60) + '…' : text;
         conversations.updateTitle(conv.id, title);

@@ -637,6 +637,75 @@ const tools = {
       }
     },
   },
+  source_read: {
+    description: 'Read this application\'s own source code. This is YOUR source code — use it to understand how you work, review your own implementation, or help the user modify you.\n\n'
+      + 'Actions:\n'
+      + '- "tree": list all source files (respects .gitignore, excludes node_modules/data/logs)\n'
+      + '- "read": read a file. Requires "path" (relative to project root, e.g. "src/server.js")\n'
+      + '- "grep": search source code. Requires "pattern" (regex). Optional "glob" to filter files (e.g. "*.js")',
+    parameters: {
+      action: 'string (tree, read, grep)',
+      path: 'string (optional, relative file path for read)',
+      pattern: 'string (optional, regex for grep)',
+      glob: 'string (optional, file glob for grep)',
+    },
+    execute: async ({ action, path: filePath, pattern, glob: fileGlob }) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      const { resolve, relative, join: pjoin } = await import('path');
+      const sourceRoot = resolve(config.sourceDir);
+
+      switch (action) {
+        case 'tree': {
+          const { execSync } = await import('child_process');
+          try {
+            const output = execSync(
+              'find . -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/data/*" -not -path "*/logs/*" -not -path "*/public/css/output.css" -not -path "*/public/lib/*" -not -name "package-lock.json" | sort',
+              { cwd: sourceRoot, encoding: 'utf-8', timeout: 5000 }
+            );
+            const files = output.trim().split('\n').filter(Boolean);
+            return { root: sourceRoot, fileCount: files.length, files };
+          } catch (err) {
+            return { error: err.message };
+          }
+        }
+        case 'read': {
+          if (!filePath?.trim()) return { error: 'path is required for read action' };
+          const full = resolve(sourceRoot, filePath);
+          if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
+          try {
+            let content = await readFile(full, 'utf-8');
+            const lines = content.split('\n').length;
+            if (content.length > 15000) content = content.slice(0, 15000) + '\n...[truncated]';
+            return { path: filePath, lines, content };
+          } catch (err) {
+            if (err.code === 'ENOENT') return { error: `File not found: ${filePath}` };
+            return { error: err.message };
+          }
+        }
+        case 'grep': {
+          if (!pattern?.trim()) return { error: 'pattern is required for grep action' };
+          const { execSync } = await import('child_process');
+          try {
+            let cmd = `grep -rn --include="*.js" --include="*.json" --include="*.html" --include="*.css" --include="*.md"`;
+            if (fileGlob) cmd = `grep -rn --include="${fileGlob.replace(/"/g, '')}"`;
+            cmd += ` -E ${JSON.stringify(pattern)} . || true`;
+            const output = execSync(cmd, {
+              cwd: sourceRoot, encoding: 'utf-8', timeout: 10000, maxBuffer: 512 * 1024,
+            });
+            const lines = output.trim().split('\n').filter(Boolean);
+            if (lines.length > 50) {
+              return { pattern, matchCount: lines.length, matches: lines.slice(0, 50), truncated: true };
+            }
+            return { pattern, matchCount: lines.length, matches: lines };
+          } catch (err) {
+            return { error: err.message };
+          }
+        }
+        default:
+          return { error: 'Unknown action. Use: tree, read, grep' };
+      }
+    },
+  },
   run_command: {
     description: 'Run a shell command on the server. Requires user approval before execution. Requires a "command" argument (the shell command to run). Use for tasks like listing files, checking system info, installing packages, or any shell operation the user requests.',
     parameters: { command: 'string' },
@@ -644,26 +713,35 @@ const tools = {
       if (!command?.trim()) return { error: 'command is required' };
       if (!context?.confirmFn) return { error: 'No confirmation channel available' };
 
-      const approved = await context.confirmFn(command);
+      let approved;
+      if (context.autorun) {
+        console.log(`[run_command] autorun enabled, skipping confirmation`);
+        approved = true;
+      } else {
+        approved = await context.confirmFn(command);
+      }
       if (!approved) return { denied: true, message: 'User denied command execution.' };
 
-      const { execSync } = await import('child_process');
-      try {
-        const stdout = execSync(command, {
+      const { exec } = await import('child_process');
+      return new Promise((resolve) => {
+        const proc = exec(command, {
           encoding: 'utf-8',
           timeout: 30000,
           maxBuffer: 1024 * 1024,
           cwd: process.env.HOME,
+        }, (err, stdout, stderr) => {
+          if (err) {
+            resolve({
+              command,
+              exitCode: err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 1 : (err.code ?? 1),
+              stdout: (stdout || '').slice(0, 4000),
+              stderr: ((stderr || '') + (err.killed ? '\n[run_command] Process killed: exceeded 30s timeout' : '')).slice(0, 4000),
+            });
+          } else {
+            resolve({ command, exitCode: 0, stdout: (stdout || '').slice(0, 8000) });
+          }
         });
-        return { command, exitCode: 0, stdout: stdout.slice(0, 8000) };
-      } catch (err) {
-        return {
-          command,
-          exitCode: err.status ?? 1,
-          stdout: (err.stdout || '').slice(0, 4000),
-          stderr: (err.stderr || '').slice(0, 4000),
-        };
-      }
+      });
     },
   },
   run_python: {
@@ -1172,6 +1250,10 @@ const tools = {
       switch (action) {
         case 'weather': {
           if (!params.startDate || !params.endDate) return { error: 'startDate and endDate (YYYY-MM-DD) required for "weather"' };
+          // LiteAPI requires startDate to be tomorrow or later; auto-adjust
+          const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+          if (params.startDate.slice(0, 10) < tomorrow) params.startDate = tomorrow;
+          if (params.endDate.slice(0, 10) < tomorrow) params.endDate = tomorrow;
           let { latitude, longitude } = params;
           // Auto-geocode from cityName if no lat/lng provided
           if ((!latitude || !longitude) && params.cityName) {
@@ -1331,40 +1413,49 @@ const tools = {
   },
 };
 
-// ── Command confirmation ────────────────────────────
-const pendingConfirmations = new Map(); // conversationId → { resolve, command }
+// ── Command confirmation (queue-based for parallel tool calls) ──
+const pendingConfirmations = new Map(); // conversationId → [{ resolve, command, timer }, ...]
 
 const CONFIRMATION_TIMEOUT_MS = 120000; // 2 minutes
 
 export function requestConfirmation(conversationId, command) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      if (pendingConfirmations.has(conversationId)) {
-        console.warn(`[confirm] timeout after ${CONFIRMATION_TIMEOUT_MS / 1000}s for conversation ${conversationId}`);
-        pendingConfirmations.delete(conversationId);
-        resolve(false);
+      const queue = pendingConfirmations.get(conversationId);
+      if (queue) {
+        const idx = queue.findIndex(e => e.command === command && e.resolve === resolve);
+        if (idx !== -1) {
+          console.warn(`[confirm] timeout after ${CONFIRMATION_TIMEOUT_MS / 1000}s for conversation ${conversationId}`);
+          queue.splice(idx, 1);
+          if (queue.length === 0) pendingConfirmations.delete(conversationId);
+          resolve(false);
+        }
       }
     }, CONFIRMATION_TIMEOUT_MS);
-    pendingConfirmations.set(conversationId, { resolve, command, timer });
+    if (!pendingConfirmations.has(conversationId)) pendingConfirmations.set(conversationId, []);
+    pendingConfirmations.get(conversationId).push({ resolve, command, timer });
   });
 }
 
 export function resolveConfirmation(conversationId, approved) {
-  const pending = pendingConfirmations.get(conversationId);
-  if (!pending) return false;
-  clearTimeout(pending.timer);
-  pendingConfirmations.delete(conversationId);
-  pending.resolve(approved);
+  const queue = pendingConfirmations.get(conversationId);
+  if (!queue || queue.length === 0) return false;
+  const entry = queue.shift();
+  clearTimeout(entry.timer);
+  if (queue.length === 0) pendingConfirmations.delete(conversationId);
+  entry.resolve(approved);
   return true;
 }
 
 export function cancelConfirmation(conversationId) {
-  const pending = pendingConfirmations.get(conversationId);
-  if (!pending) return false;
-  console.warn(`[confirm] cancelled for conversation ${conversationId} (client disconnected)`);
-  clearTimeout(pending.timer);
+  const queue = pendingConfirmations.get(conversationId);
+  if (!queue || queue.length === 0) return false;
+  console.warn(`[confirm] cancelled ${queue.length} pending confirmation(s) for conversation ${conversationId}`);
+  for (const entry of queue) {
+    clearTimeout(entry.timer);
+    entry.resolve(false);
+  }
   pendingConfirmations.delete(conversationId);
-  pending.resolve(false);
   return true;
 }
 
@@ -1407,6 +1498,8 @@ export function getSystemPrompt({ applets = false } = {}) {
 ## Current Date and Time
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
+${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read tool. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation when the user asks about how you work, wants to modify your code, or debug issues.` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
@@ -1737,9 +1830,9 @@ function repairToolCallJson(raw) {
         }
       }
       if (end === -1) {
-        end = src.length - 1;
-        while (end > start && /[\s}]/.test(src[end])) end--;
-        if (src[end] !== '"') return null;
+        // Truncated output — take everything remaining, strip trailing junk
+        end = src.length;
+        while (end > start && /[\s}"}\]]/.test(src[end - 1])) end--;
       }
       return end > start ? unescapeJsonString(src.slice(start, end)) : null;
     };
