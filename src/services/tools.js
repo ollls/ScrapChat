@@ -1559,15 +1559,31 @@ Rules:
 ${applets ? `## Applet Visualizations
 
 IMPORTANT: Applets are NOT tools. Do NOT wrap applets in <tool_call> tags. Applets go directly in your response text.
+NEVER use save_file to create HTML files for visualization. NEVER generate external HTML files. ALL visualizations MUST be inline <applet> blocks in your response — they render as interactive iframes directly in the chat.
 
-When the user requests a visualization, chart, diagram, or interactive widget:
+TEMPLATES: When the user's message contains a saved HTML template (in a code block preceded by "Use this saved HTML applet template"), you MUST use that template as-is. Output it as an <applet> block. Only modify data file references (filenames in fetch calls, embedded arrays) and configuration values the user asked to change. Do NOT change the layout, CSS, column structure, or visual design. The template is the user's preferred design — respect it exactly.
+
+When the user requests a visualization, chart, diagram, dashboard, or interactive widget:
 - Output <applet type="TYPE">...</applet> directly in your response text (NEVER inside <tool_call> tags)
 - TYPE must be one of: svg, chartjs, html
 - All CSS inline in <style>, all JS inline in <script>
 - For small datasets: embed data in a const at the top of <script>
-- For large datasets or files saved with save_file: use fetch('/files/FILENAME') to load data at runtime — applets can access server files
+- For large datasets or files saved with save_file: use fetch('/files/FILENAME') to load data at runtime — applets can access server files. ALWAYS use the absolute path '/files/FILENAME' — never a bare filename without the /files/ prefix, because applets run in an iframe where relative URLs do not resolve
+- CRITICAL: Applets CANNOT discover files dynamically — there is no directory listing API. Before generating an applet that loads files, you MUST use list_files (or save_file) to know the exact filenames, then embed them as a JavaScript array/object in the applet code. Example: const FILES = ["amd_calls_2026-04-17.csv", "amd_puts_2026-04-17.csv"]; Dropdowns and selectors must be populated from this embedded list
+- CSV LOADING: When fetching CSV files, use file_read first to check the actual column headers and note them exactly. Then in the applet use this pattern:
+  async function loadCSV(url) {
+    if (!url.startsWith('/')) url = '/files/' + url;
+    const res = await fetch(url);
+    const text = await res.text();
+    const rows = text.trim().split('\\n');
+    const headers = rows[0].split(',').map(h => h.trim());
+    console.log('CSV headers:', headers, 'rows:', rows.length - 1);
+    return rows.slice(1).map(r => { const v = r.split(','); return Object.fromEntries(headers.map((h,i) => [h, v[i]?.trim() || ''])); });
+  }
+  Use EXACT header names from file_read output (e.g., "Open Interest" not "openInterest"). Wrap all fetch+render in try/catch and display errors visibly in the applet DOM: catch(e) { document.body.innerHTML = '<pre style="color:red">' + e.message + '</pre>'; }
 - Dark theme: background #1a1a2e, text #e0e0e0, accent #4a9eff, secondary #7c3aed, success #10b981, warning #f59e0b, error #ef4444, surface #16213e, border #2a2a4a
 - Responsive: use percentage widths, min/max constraints
+- TABLES: Always wrap tables in a div with overflow-x:auto so wide tables (many columns) scroll horizontally. Use white-space:nowrap on table cells to prevent column squishing. Example: <div style="overflow-x:auto"><table>...</table></div>
 - Max 50KB total HTML size
 - For resize: window.parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*')
 
@@ -1578,6 +1594,8 @@ For type="svg" applets:
 - Lines/borders: stroke="#2a2a4a"
 - Shapes: fill with the accent palette above
 - For flowcharts: use rounded rects, arrows with markers, labels centered in shapes
+- SVG is best for diagrams, flowcharts, and simple card layouts (1-2 values per card). For tabular data with 3+ columns, use type="html" with an HTML table instead — SVG cannot reliably handle multi-column text alignment
+- Use a viewBox width of at least 800. Assume each character is ~10px wide at font-size 16. Keep at most 2 text values per row in SVG. Use text-anchor="end" for right-aligned numbers with x set to (container_right - 20px)
 
 For type="chartjs" applets:
 - Chart.js is available at /lib/chart.min.js — include via <script src="/lib/chart.min.js"></script>
@@ -1642,6 +1660,8 @@ function unescapeJsonString(s) {
 
 // Try to repair malformed JSON in tool calls (common with run_python code containing newlines/quotes)
 function repairToolCallJson(raw) {
+  // Pre-fix: strip XML artifacts (self-closing tags, closing tags) that contaminate JSON
+  raw = raw.replace(/\s*\/>/g, '}').replace(/<\/[^>]+>/g, '');
   // Pre-fix: add missing opening quotes around string values (e.g. "name":etrade_account" → "name":"etrade_account")
   const quoteFixed = raw.replace(/:(\s*)([a-zA-Z_][a-zA-Z0-9_]*)"/g, ':$1"$2"');
   const nameMatch = quoteFixed.match(/"name"\s*:\s*"([^"]+)"/);

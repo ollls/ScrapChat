@@ -3,6 +3,7 @@ import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks } from '../services/llm.js';
 import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation } from '../services/tools.js';
+import { getTemplateByName } from '../services/templates.js';
 
 const router = Router();
 
@@ -53,12 +54,23 @@ router.post('/:id/messages', async (req, res) => {
   const conv = conversations.get(req.params.id);
   if (!conv) return res.status(404).json({ error: 'Not found' });
 
-  const content = (req.body.content || '').trim();
+  let content = (req.body.content || '').trim();
   const images = req.body.images; // [{ mimeType, base64 }]
   const applets = !!req.body.applets;
   const autorun = !!req.body.autorun;
   if (!content && (!images || images.length === 0)) {
     return res.status(400).json({ error: 'Content is required' });
+  }
+
+  // Expand [template: name] tags — inject saved applet HTML as context for the LLM
+  const templateRe = /\[template:\s*([^\]]+)\]/gi;
+  for (const match of [...content.matchAll(templateRe)]) {
+    const tpl = getTemplateByName(match[1].trim());
+    if (tpl) {
+      content = content.replace(match[0],
+        `\n\nUse this saved HTML applet template — output it as an <applet type="${tpl.type}"> block with ONLY the data filenames/configuration updated. Do NOT redesign the layout, styling, or structure:\n\`\`\`html\n${tpl.html}\n\`\`\``
+      );
+    }
   }
 
   // Store user message — structured content when images are present
@@ -127,14 +139,14 @@ router.post('/:id/messages', async (req, res) => {
     // buffers content for tool-call detection, returns { content, usage }.
     // When isToolRound=true, streams content tokens as {tool_content} events for user feedback.
     async function streamRound(messages, opts, isToolRound = false) {
-      const response = await streamChatCompletion(messages, opts);
+      const { response, backend } = await streamChatCompletion(messages, opts);
       let content = '';
       let usage = null;
       let suppressToolContent = false;
       let toolContentBuffer = '';   // buffer tool_content until we know it's not a tool call
       let toolContentFlushed = false; // true once buffer has been flushed (safe to stream directly)
 
-      for await (const chunk of parseSSEChunks(response)) {
+      for await (const chunk of parseSSEChunks(response, backend)) {
         const delta = chunk.choices?.[0]?.delta;
         if (delta?.reasoning_content) {
           accumulatedReasoning += delta.reasoning_content;
