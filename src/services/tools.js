@@ -1172,6 +1172,10 @@ const tools = {
       switch (action) {
         case 'weather': {
           if (!params.startDate || !params.endDate) return { error: 'startDate and endDate (YYYY-MM-DD) required for "weather"' };
+          // LiteAPI requires startDate to be tomorrow or later; auto-adjust
+          const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+          if (params.startDate.slice(0, 10) < tomorrow) params.startDate = tomorrow;
+          if (params.endDate.slice(0, 10) < tomorrow) params.endDate = tomorrow;
           let { latitude, longitude } = params;
           // Auto-geocode from cityName if no lat/lng provided
           if ((!latitude || !longitude) && params.cityName) {

@@ -8,6 +8,7 @@ const state = {
   pendingImages: [], // { dataUrl, mimeType, name }
   appletsEnabled: localStorage.getItem('appletsEnabled') !== 'false', // default true
   autorunEnabled: localStorage.getItem('autorunEnabled') === 'true', // default false
+  thinkEnabled: localStorage.getItem('thinkEnabled') !== 'false', // default true
   sessionType: null, // current session color: 'blue'|'cyan'|'amber'|'coral'|'sgreen'
   sessionColors: JSON.parse(localStorage.getItem('sessionColors') || '{}'), // convId → sessionType
 };
@@ -52,6 +53,7 @@ const attachBtn = document.getElementById('attach-btn');
 const imagePreviewStrip = document.getElementById('image-preview-strip');
 const appletToggle = document.getElementById('applet-toggle');
 const autorunToggle = document.getElementById('autorun-toggle');
+const thinkToggle = document.getElementById('think-toggle');
 const savePromptBtn = document.getElementById('save-prompt-btn');
 const saveSessionBtn = document.getElementById('save-session-btn');
 const sessionList = document.getElementById('session-list');
@@ -264,8 +266,8 @@ function extractApplets(text) {
 function createAppletIframe(applet) {
   let html = applet.html;
 
-  // Validate: must contain <script>, <svg>, or <canvas>
-  if (!/<script[\s>]|<svg[\s>]|<canvas[\s>]/i.test(html)) {
+  // Validate: html type applets are always valid; others need <script>, <svg>, or <canvas>
+  if (applet.type !== 'html' && !/<script[\s>]|<svg[\s>]|<canvas[\s>]/i.test(html)) {
     // Fallback: collapsible code block
     const details = document.createElement('details');
     details.className = 'applet-fallback';
@@ -679,7 +681,7 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
           if (payload === '[DONE]') continue;
           try {
             const data = JSON.parse(payload);
-            if (data.reasoning) {
+            if (data.reasoning && state.thinkEnabled) {
               if (!hasReasoning) {
                 hasReasoning = true;
                 bubble.insertBefore(reasoningDetails, contentSpan);
@@ -688,7 +690,7 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
               reasoningBody.textContent = accumulatedReasoning;
               responseArea.scrollTop = responseArea.scrollHeight;
             }
-            if (data.tool_content) {
+            if (data.tool_content && state.thinkEnabled) {
               // Show LLM's text during tool rounds so user knows it's not hung
               if (!hasToolUse) {
                 hasToolUse = true;
@@ -708,7 +710,7 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
               toolUseContainer._thinkingEl.textContent += data.tool_content;
               responseArea.scrollTop = responseArea.scrollHeight;
             }
-            if (data.tool_status) {
+            if (data.tool_status && state.thinkEnabled) {
               // Show inline status for slow operations (prebook, book, cancel)
               if (!hasToolUse) {
                 hasToolUse = true;
@@ -732,6 +734,9 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
                 delete toolUseContainer._thinkingEl;
               }
               trackToolUse(data.tool_use.name);
+              if (!state.thinkEnabled) {
+                // Skip rendering tool use details
+              } else {
               if (!hasToolUse) {
                 hasToolUse = true;
                 bubble.insertBefore(toolUseContainer, contentSpan);
@@ -819,7 +824,8 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
               const dl = makeFileDownloadLink(data.tool_use.name, data.tool_use.result);
               if (dl) toolUseContainer.appendChild(dl);
               responseArea.scrollTop = responseArea.scrollHeight;
-            }
+            } // end else (thinkEnabled)
+            } // end if (data.tool_use)
             if (data.confirm_command) {
               if (!hasToolUse) {
                 hasToolUse = true;
@@ -1356,14 +1362,19 @@ newChatButtons.forEach(btn => {
       const match = sessions.find(s => s.color === sessionType);
       if (match) {
         const vars = extractPromptVariables(match.text);
+        // Disable Think for session init prompt
+        const wasThinkEnabled = state.thinkEnabled;
+        state.thinkEnabled = false;
+        thinkToggle.checked = false;
         if (vars.length > 0) {
-          // Has variables — show modal, auto-submit hidden on confirm
           showPromptVarsModal(match.text, vars);
           const modal = document.getElementById('prompt-vars-modal');
-          modal._autoSubmitHidden = true;
+          modal._restoreThink = wasThinkEnabled;
         } else {
           const text = expandPromptMacros(match.text);
           await sendMessage(text, null, { hideUserMessage: true });
+          state.thinkEnabled = wasThinkEnabled;
+          thinkToggle.checked = wasThinkEnabled;
           return;
         }
       }
@@ -1461,6 +1472,13 @@ autorunToggle.addEventListener('change', () => {
   localStorage.setItem('autorunEnabled', state.autorunEnabled);
 });
 
+// Think toggle
+thinkToggle.checked = state.thinkEnabled;
+thinkToggle.addEventListener('change', () => {
+  state.thinkEnabled = thinkToggle.checked;
+  localStorage.setItem('thinkEnabled', state.thinkEnabled);
+});
+
 imageInput.addEventListener('change', () => {
   for (const file of imageInput.files) {
     addPendingImage(file);
@@ -1555,6 +1573,7 @@ function renderSessions(sessions) {
 
     item.addEventListener('click', () => {
       sessionsDropdown.classList.add('hidden');
+      if (!state.currentConversationId || !state.sessionType) return;
       const vars = extractPromptVariables(s.text);
       if (vars.length > 0) {
         showPromptVarsModal(s.text, vars);
@@ -1607,6 +1626,7 @@ function renderTemplates(templates) {
     });
 
     item.addEventListener('click', () => {
+      if (!state.currentConversationId || !state.sessionType) return;
       const tag = `[template: ${t.name}]`;
       const pos = input.selectionStart || input.value.length;
       input.value = input.value.slice(0, pos) + tag + input.value.slice(pos);
@@ -1925,14 +1945,18 @@ document.getElementById('prompt-vars-submit').addEventListener('click', () => {
   const values = collectVarValues();
   let text = substituteVars(modal._promptText, modal._vars, values);
   text = expandPromptMacros(text);
-  const autoSubmitHidden = modal._autoSubmitHidden;
+  const restoreThink = modal._restoreThink;
   if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
   modal._flatpickrInstances = [];
-  modal._autoSubmitHidden = false;
+  modal._restoreThink = undefined;
   modal.classList.add('hidden');
-  if (autoSubmitHidden) {
-    sendMessage(text, null, { hideUserMessage: true });
-  } else {
+  if (restoreThink !== undefined) {
+    // Session init with variables — auto-submit hidden, then restore Think
+    sendMessage(text, null, { hideUserMessage: true }).then(() => {
+      state.thinkEnabled = restoreThink;
+      thinkToggle.checked = restoreThink;
+    });
+  } else if (state.currentConversationId && state.sessionType) {
     input.value = text;
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 200) + 'px';
@@ -1946,7 +1970,12 @@ document.getElementById('prompt-vars-modal').addEventListener('keydown', (e) => 
     const modal = document.getElementById('prompt-vars-modal');
     if (modal._flatpickrInstances) modal._flatpickrInstances.forEach(fp => fp.destroy());
     modal._flatpickrInstances = [];
-    modal._autoSubmitHidden = false;
+    // Restore Think if cancelled during session init
+    if (modal._restoreThink !== undefined) {
+      state.thinkEnabled = modal._restoreThink;
+      thinkToggle.checked = modal._restoreThink;
+      modal._restoreThink = undefined;
+    }
     modal.classList.add('hidden');
   }
   if (e.key === 'Enter') {
@@ -2016,6 +2045,7 @@ function renderPrompts(prompts) {
     });
 
     item.addEventListener('click', () => {
+      if (!state.currentConversationId || !state.sessionType) return;
       const vars = extractPromptVariables(p.text);
       if (vars.length > 0) {
         showPromptVarsModal(p.text, vars);
