@@ -259,7 +259,7 @@ function renderSidebar() {
 
     // Compact button — only for pinned conversations with messages
     let compactBtn = null;
-    if (conv.pinned && conv.messages?.length > 2) {
+    if (conv.pinned && (conv.messageCount || 0) > 2) {
       compactBtn = document.createElement('button');
       compactBtn.className = 'text-zinc-600 hover:text-cyan-400 px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer';
       compactBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/></svg>';

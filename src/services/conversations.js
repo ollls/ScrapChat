@@ -61,8 +61,8 @@ function create(title) {
 function list() {
   return [...store.values()]
     .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updatedAt.localeCompare(a.updatedAt))
-    .map(({ id, title, slotId, tokenCount, pinned, createdAt, updatedAt }) => ({
-      id, title, slotId, tokenCount, pinned, createdAt, updatedAt,
+    .map(({ id, title, slotId, tokenCount, pinned, messages, createdAt, updatedAt }) => ({
+      id, title, slotId, tokenCount, pinned, messageCount: messages.length, createdAt, updatedAt,
     }));
 }
 
