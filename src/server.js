@@ -39,7 +39,16 @@ app.get('/api/config', (_req, res) => {
 app.post('/api/terminal', (_req, res) => {
   if (!config.terminal) return res.status(400).json({ error: 'TERMINAL not configured in .env' });
   const cwd = config.sourceDir ? resolve(config.sourceDir) : process.env.HOME;
-  exec(`${config.terminal} --working-directory="${cwd}"`, (err) => {
+  const term = config.terminal;
+  // Terminal-specific working directory flags
+  const cwdFlags = {
+    'cosmic-term': `-w "${cwd}"`,
+    'kitty': `-d "${cwd}"`,
+    'alacritty': `--working-directory "${cwd}"`,
+  };
+  const bin = term.split('/').pop(); // handle full paths like /usr/bin/cosmic-term
+  const flag = cwdFlags[bin] || `--working-directory="${cwd}"`;
+  exec(`${term} ${flag}`, (err) => {
     if (err) console.warn('[terminal]', err.message);
   });
   res.json({ ok: true, cwd });
