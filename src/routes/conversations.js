@@ -380,7 +380,7 @@ router.post('/:id/messages', async (req, res) => {
         let directive = '';
         if (roundSavedFiles.length > 0) {
           directive = `This round saved: ${roundSavedFiles.join(', ')}. Use run_python to analyze these files. Do NOT re-fetch data you already have.`;
-        } else if (!hadChainData) {
+        } else if (hadExpiryCall && !hadChainData) {
           directive = 'NOW call optionchains (with saveAs and strikePriceNear) for the expiries you need. Do NOT re-fetch quote or optionexpiry.';
         }
 
