@@ -132,6 +132,7 @@ Safety mechanisms:
 | `source_delete` | Delete source files (e.g. during refactors). Confirmation required. Scoped to SOURCE_DIR |
 | `source_git` | Git commands with safety tiers: read-only (no confirm), local writes (confirm/autorun), remote (always confirm), destructive (blocked). cwd=SOURCE_DIR |
 | `source_test` | Run project test command (SOURCE_TEST env var). No params, no confirmation, 120s timeout. Language-agnostic |
+| `source_project` | Switch source tools to a different project directory. Always requires confirmation. Actions: switch, reset, status |
 | `etrade_account` | E*TRADE: accounts, portfolio, transactions, orders, alerts, quotes, option chains/expiry, symbol lookup |
 | `hotel` | LiteAPI: hotel search, details, rates, reviews, semantic search |
 | `travel` | LiteAPI: weather, places, countries, cities, IATA codes, price index |
@@ -208,6 +209,7 @@ All three dropdown menus (Prompts, Sessions, Templates) share the same UI patter
 - `source_delete` tool: remove source files with confirmation, directory protection (files only)
 - `source_git` tool: git commands with safety tiers — read-only (no confirm), local writes (confirm/autorun), remote (always confirm), destructive ops blocked
 - `source_test` tool: runs `SOURCE_TEST` command in source dir, no confirmation needed, 120s timeout, language-agnostic
+- `source_project` tool: switch all source tools to a different project directory at runtime. Always requires confirmation (never skipped by autorun). Actions: switch (with path), reset (back to .env), status
 - Path-escape protection on all source tools: resolved paths must start with `sourceRoot`
 - System prompt includes "Self-Awareness" section when `SOURCE_DIR` configured
 - No confirmation needed — read-only access scoped to source directory

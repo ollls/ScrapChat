@@ -7,6 +7,9 @@ import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { spawn } from 'child_process';
 import config from '../config.js';
+
+// Original SOURCE_DIR from .env — used by source_project to reset
+const originalSourceDir = config.sourceDir;
 import etrade from './etrade.js';
 import liteapi from './liteapi.js';
 
@@ -666,6 +669,59 @@ const tools = {
       } catch (err) {
         if (err.code === 'ENOENT') return { error: `File not found: ${safe}` };
         return { error: err.message };
+      }
+    },
+  },
+  source_project: {
+    description: 'Switch the source code working directory to a different project. All source tools (source_read, source_write, source_edit, source_delete, source_git, source_test) will operate on the new directory.\n\n'
+      + 'Actions:\n'
+      + '- "switch": switch to a new project. Requires "path" (absolute or ~/ path, e.g. "~/prj/my_app")\n'
+      + '- "reset": revert to the original project directory from .env\n'
+      + '- "status": show current and original source directories\n\n'
+      + 'Always requires user approval.',
+    parameters: {
+      action: 'string (switch, reset, status)',
+      path: 'string (optional, absolute path for switch action)',
+    },
+    execute: async ({ action, path: targetPath }, context) => {
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      switch (action) {
+        case 'status':
+          return { current: config.sourceDir || '(not set)', original: originalSourceDir || '(not set)' };
+
+        case 'reset': {
+          if (!originalSourceDir) return { error: 'No original SOURCE_DIR configured in .env' };
+          if (config.sourceDir === originalSourceDir) return { message: 'Already pointing to original project', current: config.sourceDir };
+          const prev = config.sourceDir;
+          const approved = await context.confirmFn(`Reset source directory:\n  from: ${prev}\n  to:   ${originalSourceDir}`);
+          if (!approved) return { denied: true, message: 'User denied project reset.' };
+          config.sourceDir = originalSourceDir;
+          return { switched: true, previous: prev, current: config.sourceDir };
+        }
+
+        case 'switch': {
+          if (!targetPath?.trim()) return { error: 'path is required for switch action' };
+          // Expand ~ to home directory
+          const expanded = targetPath.startsWith('~') ? targetPath.replace('~', process.env.HOME || '') : targetPath;
+          const full = resolve(expanded);
+          try {
+            const s = await stat(full);
+            if (!s.isDirectory()) return { error: `Not a directory: ${full}` };
+          } catch (err) {
+            if (err.code === 'ENOENT') return { error: `Directory not found: ${full}` };
+            return { error: err.message };
+          }
+          if (config.sourceDir === full) return { message: 'Already pointing to this directory', current: full };
+          const prev = config.sourceDir;
+          const approved = await context.confirmFn(`Switch source directory:\n  from: ${prev || '(not set)'}\n  to:   ${full}`);
+          if (!approved) return { denied: true, message: 'User denied project switch.' };
+          config.sourceDir = full;
+          return { switched: true, previous: prev || '(not set)', current: full };
+        }
+
+        default:
+          return { error: 'Unknown action. Use: switch, reset, status' };
       }
     },
   },
@@ -1867,7 +1923,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
-${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read, source_edit, and source_write tools. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation, source_edit for targeted changes, source_write to create or fully replace files, source_delete to remove files, source_git for version control, and source_test to verify your changes work.` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read, source_edit, and source_write tools. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation, source_edit for targeted changes, source_write to create or fully replace files, source_delete to remove files, source_git for version control, and source_test to verify your changes work. Use source_project to switch all source tools to a different project directory.` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
