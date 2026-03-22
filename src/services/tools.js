@@ -819,7 +819,11 @@ const tools = {
             if (content.length > 15000) content = content.slice(0, 15000) + '\n...[truncated]';
             return { path: filePath, lines, content };
           } catch (err) {
-            if (err.code === 'ENOENT') return { error: `File not found: ${filePath}` };
+            if (err.code === 'ENOENT') {
+              const dirName = basename(sourceRoot);
+              const hint = filePath.startsWith(dirName) ? ` (hint: you are already in ${dirName}/ — use "${filePath.replace(dirName + '/', '')}" instead)` : '';
+              return { error: `File not found: ${filePath}${hint}` };
+            }
             return { error: err.message };
           }
         }
