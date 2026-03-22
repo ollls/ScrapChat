@@ -49,6 +49,12 @@ function simpleDiff(oldContent, newContent, filePath) {
   return lines.join('\n');
 }
 
+function tagLineCount(stdout, limit) {
+  const out = (stdout || '').slice(0, limit);
+  const lines = out.split('\n').filter(Boolean);
+  return lines.length > 3 ? out + `\n[${lines.length} lines total]` : out;
+}
+
 // ── Tool call logger ────────────────────────────────
 async function logToolCall(toolName, action, { args, rawResult, formattedResult }) {
   try {
@@ -1089,11 +1095,11 @@ const tools = {
             res({
               command: `git ${fullCmd}`,
               exitCode: typeof err.code === 'number' ? err.code : 1,
-              stdout: (stdout || '').slice(0, 8000),
+              stdout: tagLineCount(stdout, 8000),
               stderr: ((stderr || '') + (err.killed ? '\n[source_git] killed: exceeded 30s timeout' : '')).slice(0, 4000),
             });
           } else {
-            res({ command: `git ${fullCmd}`, exitCode: 0, stdout: (stdout || '').slice(0, 8000), stderr: (stderr || '').slice(0, 4000) });
+            res({ command: `git ${fullCmd}`, exitCode: 0, stdout: tagLineCount(stdout, 8000), stderr: (stderr || '').slice(0, 4000) });
           }
         });
       });
@@ -1123,7 +1129,7 @@ const tools = {
             command: config.sourceTest,
             exitCode,
             passed: exitCode === 0,
-            stdout: (stdout || '').slice(0, 8000),
+            stdout: tagLineCount(stdout, 8000),
             stderr: ((stderr || '') + (timedOut ? '\n[source_test] killed: exceeded 120s timeout' : '')).slice(0, 4000),
           });
         });
@@ -1158,11 +1164,11 @@ const tools = {
             resolve({
               command,
               exitCode: err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 1 : (err.code ?? 1),
-              stdout: (stdout || '').slice(0, 4000),
+              stdout: tagLineCount(stdout, 4000),
               stderr: ((stderr || '') + (err.killed ? '\n[run_command] Process killed: exceeded 30s timeout' : '')).slice(0, 4000),
             });
           } else {
-            resolve({ command, exitCode: 0, stdout: (stdout || '').slice(0, 8000) });
+            resolve({ command, exitCode: 0, stdout: tagLineCount(stdout, 8000) });
           }
         });
       });
@@ -1248,7 +1254,7 @@ const tools = {
       }
       console.log(`[run_python] detected ${outputFiles.length} new/modified files (${elapsed()})`);
 
-      const result = { exitCode, stdout: stdout.slice(0, 8000) };
+      const result = { exitCode, stdout: tagLineCount(stdout, 8000) };
       if (timedOut) result.timedOut = true;
       if (stderr) result.stderr = stderr.slice(0, 4000);
       if (outputFiles.length) result.files = outputFiles;
