@@ -2433,7 +2433,15 @@ saveSessionBtn.addEventListener('click', async () => {
 
 // ── Init ──────────────────────────────────────────────
 (async function init() {
-  try { const cfg = await (await fetch('/api/config')).json(); state.location = cfg.location || ''; } catch {}
+  try {
+    const cfg = await (await fetch('/api/config')).json();
+    state.location = cfg.location || '';
+    if (cfg.terminal) {
+      const termBtn = document.getElementById('terminal-btn');
+      termBtn.classList.remove('hidden');
+      termBtn.addEventListener('click', () => fetch('/api/terminal', { method: 'POST' }));
+    }
+  } catch {}
   await refreshSidebar();
   // Restore active session from localStorage
   if (state.currentConversationId) {
