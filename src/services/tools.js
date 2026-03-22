@@ -14,6 +14,38 @@ const __dirname = import.meta.dirname || (() => { const f = fileURLToPath(import
 const DATA_DIR = resolve(__dirname, '../../data');
 const LOG_DIR = resolve(__dirname, '../../logs');
 
+// ── source_edit helpers ────────────────────────────────
+const fileEditLocks = new Map();
+
+async function withFileLock(filePath, fn) {
+  const prev = fileEditLocks.get(filePath) || Promise.resolve();
+  const current = prev.then(fn, fn);
+  fileEditLocks.set(filePath, current);
+  try { return await current; }
+  finally { if (fileEditLocks.get(filePath) === current) fileEditLocks.delete(filePath); }
+}
+
+function simpleDiff(oldContent, newContent, filePath) {
+  const oldLines = oldContent.split('\n');
+  const newLines = newContent.split('\n');
+  let firstDiff = 0;
+  while (firstDiff < oldLines.length && firstDiff < newLines.length && oldLines[firstDiff] === newLines[firstDiff]) firstDiff++;
+  let oldEnd = oldLines.length - 1;
+  let newEnd = newLines.length - 1;
+  while (oldEnd > firstDiff && newEnd > firstDiff && oldLines[oldEnd] === newLines[newEnd]) { oldEnd--; newEnd--; }
+  const ctx = 2;
+  const start = Math.max(0, firstDiff - ctx);
+  const oEnd = Math.min(oldLines.length - 1, oldEnd + ctx);
+  const nEnd = Math.min(newLines.length - 1, newEnd + ctx);
+  const lines = [`--- ${filePath}`, `+++ ${filePath}`, `@@ -${start + 1},${oEnd - start + 1} +${start + 1},${nEnd - start + 1} @@`];
+  for (let i = start; i <= Math.max(oEnd, nEnd); i++) {
+    if (i >= firstDiff && i <= oldEnd) lines.push(`-${oldLines[i]}`);
+    if (i >= firstDiff && i <= newEnd) lines.push(`+${newLines[i]}`);
+    if (i < firstDiff || i > Math.max(oldEnd, newEnd)) lines.push(` ${oldLines[i] || newLines[i]}`);
+  }
+  return lines.join('\n');
+}
+
 // ── Tool call logger ────────────────────────────────
 async function logToolCall(toolName, action, { args, rawResult, formattedResult }) {
   try {
@@ -745,6 +777,183 @@ const tools = {
       } catch (err) {
         return { error: err.message };
       }
+    },
+  },
+  source_edit: {
+    description: 'Make targeted edits to source files. Replaces an exact string with new content — use source_read first to see the current file, then specify the exact text to replace.\n\n'
+      + 'Parameters:\n'
+      + '- "path": relative file path (e.g. "src/services/tools.js")\n'
+      + '- "old_string": exact text to find and replace (must match exactly one location in the file). Empty string = create new file.\n'
+      + '- "new_string": replacement text. Empty string = delete the matched text.\n\n'
+      + 'Rules:\n'
+      + '- old_string must be unique in the file. If multiple matches found, the tool returns all match locations — retry with more surrounding context.\n'
+      + '- Copy old_string exactly from source_read output, including indentation.\n'
+      + '- Requires user approval unless autorun is enabled.',
+    parameters: {
+      path: 'string (relative file path)',
+      old_string: 'string (exact text to find, or empty to create new file)',
+      new_string: 'string (replacement text)',
+    },
+    execute: async ({ path: filePath, old_string: oldStr, new_string: newStr }, context) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!filePath?.trim()) return { error: 'path is required' };
+      if (newStr == null) return { error: 'new_string is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      const sourceRoot = resolve(config.sourceDir);
+      const full = resolve(sourceRoot, filePath);
+      if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
+
+      // CREATE mode: old_string is empty
+      if (!oldStr) {
+        try {
+          await stat(full);
+          return { error: 'old_string is required when editing an existing file' };
+        } catch {
+          // File doesn't exist — create it
+          let approved;
+          if (context.autorun) { approved = true; }
+          else { approved = await context.confirmFn(`Create file: ${filePath}\n(${newStr.split('\n').length} lines)`); }
+          if (!approved) return { denied: true, message: 'User denied file creation.' };
+          const { dirname } = await import('path');
+          await mkdir(dirname(full), { recursive: true });
+          await writeFile(full, newStr, 'utf-8');
+          return { path: filePath, created: true, lines: newStr.split('\n').length, size: Buffer.byteLength(newStr, 'utf-8') };
+        }
+      }
+
+      // EDIT mode
+      return withFileLock(full, async () => {
+        let content;
+        try {
+          content = await readFile(full, 'utf-8');
+        } catch (err) {
+          if (err.code === 'ENOENT') return { error: `File not found: ${filePath}` };
+          return { error: err.message };
+        }
+
+        // Safety checks
+        const buf = Buffer.from(content.slice(0, 8192));
+        if (buf.includes(0)) return { error: 'Binary file — use source_write for binary content' };
+        if (Buffer.byteLength(content, 'utf-8') > 1024 * 1024) {
+          return { error: `File too large (${Buffer.byteLength(content, 'utf-8')} bytes) — use run_command with sed for large files` };
+        }
+        if (oldStr === newStr) return { noChange: true, message: 'old_string and new_string are identical' };
+        if (oldStr.includes('[truncated]')) {
+          return { warning: 'old_string contains "[truncated]" — this is a truncation marker from source_read, not actual file content. Re-read the file to get the real text.' };
+        }
+
+        // Find matches
+        let matchCount = 0;
+        let idx = -1;
+        let searchFrom = 0;
+        const matchPositions = [];
+        while ((idx = content.indexOf(oldStr, searchFrom)) !== -1) {
+          matchCount++;
+          const lineNum = content.slice(0, idx).split('\n').length;
+          const lines = content.split('\n');
+          const ctxStart = Math.max(0, lineNum - 3);
+          const ctxEnd = Math.min(lines.length - 1, lineNum + 1);
+          matchPositions.push({ line: lineNum, context: lines.slice(ctxStart, ctxEnd + 1).join('\n') });
+          searchFrom = idx + 1;
+        }
+
+        // Whitespace fallback
+        let whitespaceAdjusted = false;
+        if (matchCount === 0) {
+          const normalize = s => s.replace(/[ \t]+/g, ' ');
+          const normOld = normalize(oldStr);
+          const normContent = normalize(content);
+          let normIdx = -1;
+          let normCount = 0;
+          let normSearchFrom = 0;
+          while ((normIdx = normContent.indexOf(normOld, normSearchFrom)) !== -1) {
+            normCount++;
+            normSearchFrom = normIdx + 1;
+          }
+          if (normCount === 1) {
+            // Find the actual substring in original content that matches when normalized
+            const contentLines = content.split('\n');
+            const oldLines = oldStr.split('\n');
+            outer: for (let i = 0; i <= contentLines.length - oldLines.length; i++) {
+              for (let j = 0; j < oldLines.length; j++) {
+                if (normalize(contentLines[i + j]) !== normalize(oldLines[j])) continue outer;
+              }
+              // Found the matching region — use the actual content as oldStr
+              oldStr = contentLines.slice(i, i + oldLines.length).join('\n');
+              matchCount = 1;
+              whitespaceAdjusted = true;
+              break;
+            }
+          }
+        }
+
+        if (matchCount === 0) {
+          return { error: 'No match found for old_string', hint: 'Verify current file content with source_read.', fileLines: content.split('\n').length };
+        }
+        if (matchCount > 1) {
+          return { error: `Found ${matchCount} matches — old_string must be unique. Include more surrounding context.`, matches: matchPositions };
+        }
+
+        // Apply edit
+        const newContent = content.replace(oldStr, newStr);
+        const diff = simpleDiff(content, newContent, filePath);
+
+        let approved;
+        if (context.autorun) {
+          console.log(`[source_edit] autorun enabled, skipping confirmation`);
+          approved = true;
+        } else {
+          approved = await context.confirmFn(`Edit file: ${filePath}\n${diff}`);
+        }
+        if (!approved) return { denied: true, message: 'User denied edit.' };
+
+        await writeFile(full, newContent, 'utf-8');
+        const oldLineCount = oldStr.split('\n').length;
+        const newLineCount = newStr.split('\n').length;
+        const result = { path: filePath, linesRemoved: oldLineCount, linesAdded: newLineCount, size: Buffer.byteLength(newContent, 'utf-8') };
+        if (whitespaceAdjusted) result.whitespaceAdjusted = true;
+        return result;
+      });
+    },
+  },
+  source_delete: {
+    description: 'Delete a file from the application\'s source code directory. Use during refactors to remove unused files.\n\n'
+      + 'Parameters:\n'
+      + '- "path": relative file path to delete (e.g. "src/services/old.js")\n\n'
+      + 'Requires user approval unless autorun is enabled.',
+    parameters: {
+      path: 'string (relative file path)',
+    },
+    execute: async ({ path: filePath }, context) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!filePath?.trim()) return { error: 'path is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      const sourceRoot = resolve(config.sourceDir);
+      const full = resolve(sourceRoot, filePath);
+      if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
+
+      let fileStats;
+      try {
+        fileStats = await stat(full);
+      } catch (err) {
+        if (err.code === 'ENOENT') return { error: `File not found: ${filePath}` };
+        return { error: err.message };
+      }
+      if (fileStats.isDirectory()) return { error: 'Cannot delete directories — only files' };
+
+      let approved;
+      if (context.autorun) {
+        console.log(`[source_delete] autorun enabled, skipping confirmation`);
+        approved = true;
+      } else {
+        approved = await context.confirmFn(`Delete file: ${filePath} (${fileStats.size} bytes)`);
+      }
+      if (!approved) return { denied: true, message: 'User denied file deletion.' };
+
+      await unlink(full);
+      return { path: filePath, deleted: true, size: fileStats.size };
     },
   },
   run_command: {
@@ -1540,7 +1749,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
-${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read and source_write tools. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation and source_write to create or overwrite source files when the user asks you to modify your code.` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read, source_edit, and source_write tools. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation, source_edit for targeted changes, source_write to create or fully replace files, and source_delete to remove files during refactors.` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 

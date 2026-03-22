@@ -29,7 +29,7 @@ src/
     sessions.js            # Session prompts persistence + reorder + update
     templates.js           # Template persistence + reorder + update
   services/
-    conversations.js       # In-memory conversation store (Map-based)
+    conversations.js       # Conversation store (Map-based, pinned convs persisted to data/pinned/)
     llm.js                 # llama-server client (streaming, non-streaming, SSE parser)
     tools.js               # Tool registry, system prompt, parser, executor, tool call logger
     slots.js               # Slot monitor (polling, assignment, pin/unpin)
@@ -42,6 +42,7 @@ src/
   public/css/              # Tailwind input/output
   public/lib/chart.min.js  # Chart.js v4 static bundle (served at /lib/chart.min.js)
 data/                      # Runtime data dir: saved files, prompts.json, sessions.json (served at /files/)
+  pinned/                  # Pinned conversation JSON files (<id>.json)
 logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 ```
 
@@ -54,6 +55,8 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 | `/api/conversations/:id` | PATCH | Update title |
 | `/api/conversations/:id` | DELETE | Delete conversation + release slot |
 | `/api/conversations/:id/messages` | POST | Send message, streams SSE response |
+| `/api/conversations/:id/pin` | POST | Pin conversation (persist to disk) |
+| `/api/conversations/:id/unpin` | POST | Unpin conversation (remove from disk) |
 | `/api/conversations/:id/confirm` | POST | Approve/deny pending command (run_command tool) |
 | `/api/slots` | GET | Slot status enriched with conversation mapping |
 | `/api/slots/pin` | POST | Pin conversation to slot |
@@ -123,6 +126,9 @@ Safety mechanisms:
 | `run_command` | Shell command execution via async exec (non-blocking), 30s timeout |
 | `run_python` | Execute Python script in venv, cwd=data dir, 120s timeout |
 | `source_read` | Read app's own source code: tree (list files), read (file contents), grep (search). Scoped to SOURCE_DIR |
+| `source_write` | Write/create source files. Path-escape protected, confirmation required. Scoped to SOURCE_DIR |
+| `source_edit` | Targeted edits: exact string replacement with uniqueness check, whitespace fallback, diff preview, file locking. Scoped to SOURCE_DIR |
+| `source_delete` | Delete source files (e.g. during refactors). Confirmation required. Scoped to SOURCE_DIR |
 | `etrade_account` | E*TRADE: accounts, portfolio, transactions, orders, alerts, quotes, option chains/expiry, symbol lookup |
 | `hotel` | LiteAPI: hotel search, details, rates, reviews, semantic search |
 | `travel` | LiteAPI: weather, places, countries, cities, IATA codes, price index |
@@ -194,7 +200,10 @@ All three dropdown menus (Prompts, Sessions, Templates) share the same UI patter
 ### Source Code Self-Awareness
 - `SOURCE_DIR` env var points to project root
 - `source_read` tool with three actions: `tree` (list files), `read` (file by path), `grep` (regex search)
-- Path-escape protection: resolved paths must start with `sourceRoot`
+- `source_write` tool: create or overwrite source files with full content
+- `source_edit` tool: targeted string replacement with uniqueness enforcement, whitespace fallback, diff preview in confirmation, per-file mutex for concurrent safety
+- `source_delete` tool: remove source files with confirmation, directory protection (files only)
+- Path-escape protection on all source tools: resolved paths must start with `sourceRoot`
 - System prompt includes "Self-Awareness" section when `SOURCE_DIR` configured
 - No confirmation needed — read-only access scoped to source directory
 
@@ -230,6 +239,9 @@ The `/api/conversations/:id/messages` endpoint streams these SSE events:
 
 ## UI Layout
 Full-width top bar spanning entire window width with: colored session `+` buttons (left), status indicator grid (2 rows: core + APIs), menus (Tools/Prompts/Sessions/Templates), Context bar + Slots (right). Below: sidebar (conversation list) + main chat area side by side. Input area has textarea with vertical button stack (Send/Save Prompt/Save Session) and checkboxes (Applets/Autorun/Think).
+
+### Conversation Pinning
+Pin button (📌) in sidebar persists conversations to disk across server restarts. Pinned conversations saved as individual JSON files in `data/pinned/<id>.json`. On startup, all pinned files loaded into the in-memory Map. Any mutation to a pinned conversation (new message, title change, token count) auto-saves to disk. `slotId` saved as `null` (slots are ephemeral). Sidebar sorts pinned conversations first, then by `updatedAt`. Unpinning removes the file but conversation stays in memory until restart.
 
 ## Key Architecture Details
 - `.env` file is **required** — config.js exits if missing
