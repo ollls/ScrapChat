@@ -16,7 +16,43 @@ npm run css:build      # Build Tailwind CSS
 npm start              # Open http://localhost:3000
 ```
 
-Requires: **Node.js >= 20** and a running **llama.cpp server** (`llama-server -m model.gguf -c 131072 --port 8080`).
+Requires: **Node.js >= 20** and a running **llama.cpp server** (see setup below).
+
+## LLM Server Setup
+
+ScrapChat connects to a local [llama.cpp](https://github.com/ggerganov/llama.cpp) server. Tested and running great on an **NVIDIA RTX 5090** with the Qwen3.5-35B-A3B mixture-of-experts model (only 3B active parameters — fast inference with strong reasoning at 131K context).
+
+```bash
+#!/bin/bash
+# run-qwen-server-5090.sh
+
+export CUDA_VISIBLE_DEVICES=0
+
+./llama.cpp/build/bin/llama-server \
+  -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL \
+  --ctx-size 131072 \
+  --gpu-layers 99 \
+  --flash-attn on \
+  -t 16 \
+  --temp 1.0 \
+  --top-p 0.95 \
+  --min-p 0.01 \
+  --top-k 40 \
+  --repeat-penalty 1.05 \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  --mmap \
+  --host 0.0.0.0 \
+  --port 8080
+```
+
+**Why this works well:**
+- `--gpu-layers 99` — full GPU offload, the 5090 has plenty of VRAM
+- `--flash-attn on` — flash attention enables the full 131K context window
+- `--cache-type-k/v q8_0` — quantized KV cache fits 131K context in VRAM
+- Qwen3.5-35B-A3B is a MoE model — only 3B params active per token, so inference is fast while total knowledge spans 35B
+
+Any llama.cpp-compatible model works. Adjust `--ctx-size` and quantization for your GPU. Smaller models like Qwen3-8B or Llama-3.1-8B run fine on GPUs with less VRAM.
 
 ## What It Does
 
@@ -28,7 +64,7 @@ ScrapChat is a universal assistant. Ask it anything — it picks the right tools
 - **Execute shell commands** on your machine
 - **Generate interactive dashboards** — Chart.js, SVG, and HTML visualizations right in chat
 - **Manage your E\*TRADE portfolio** — holdings, options, transactions, real-time quotes
-- **Read its own source code** — it knows how it works and can help you modify it
+- **Read and edit its own source code** — it knows how it works and can modify itself with diff previews and git integration
 
 ### Financial Analysis
 
@@ -69,7 +105,8 @@ All settings via `.env`:
 | `PORT` | Web server port (default: 3000) |
 | `LLAMA_URL` | llama.cpp server URL (default: http://localhost:8080) |
 | `LOCATION` | Your default location for weather/travel (e.g. "Oakland Park, FL") |
-| `SOURCE_DIR` | Project root path — enables AI self-awareness |
+| `SOURCE_DIR` | Project root path — enables AI code development tools |
+| `SOURCE_TEST` | Test command (e.g. `npm test`, `pytest`, `cargo test`) |
 | `PYTHON_VENV` | Path to Python venv for code execution |
 | `SEARCH_ENGINE` | `keiro`, `tavily`, or `both` |
 | `TAVILY_API_KEY` | Tavily search key |
@@ -107,7 +144,7 @@ Set `PYTHON_VENV=~/finance_venv` in `.env`.
 
 ## Tools
 
-The AI has 13 built-in tools it uses automatically:
+The AI has 20 built-in tools it uses automatically:
 
 | Tool | What it does |
 |---|---|
@@ -116,7 +153,13 @@ The AI has 13 built-in tools it uses automatically:
 | `run_python` | Execute Python scripts |
 | `run_command` | Run shell commands |
 | `save_file` / `list_files` / `file_read` | File management |
-| `source_read` | Read this app's own source code |
+| `source_project` | Switch to a different project directory |
+| `source_read` | Browse source code (tree, read, grep) |
+| `source_write` | Create or overwrite source files |
+| `source_edit` | Targeted edits with diff preview |
+| `source_delete` | Remove source files |
+| `source_git` | Git with safety tiers (blocks destructive ops) |
+| `source_test` | Run project tests (configurable per project) |
 | `etrade_account` | E\*TRADE portfolio, quotes, options, orders |
 | `hotel` / `travel` / `booking` | Hotel search, weather, trip booking |
 | `current_datetime` | Current time and timezone |
