@@ -2231,6 +2231,8 @@ function repairToolCallJson(raw) {
     run_python: { primary: 'code' },
     run_command: { primary: 'command' },
     save_file: { primary: 'content', extra: ['filename'] },
+    source_write: { primary: 'content', extra: ['path'] },
+    source_edit: { primary: 'new_string', extra: ['path', 'old_string'] },
   };
   const argConfig = toolArgMap[name];
   if (argConfig) {
