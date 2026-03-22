@@ -847,9 +847,6 @@ const tools = {
       const full = resolve(sourceRoot, filePath);
       if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
 
-      // Auto-fix Python booleans for .py files
-      if (filePath.endsWith('.py')) content = fixPythonBooleans(content);
-
       // Read existing content for diff (empty string if new file)
       let oldContent = '';
       try { oldContent = await readFile(full, 'utf-8'); } catch {}
@@ -916,9 +913,6 @@ const tools = {
           return { path: filePath, created: true, lines: newStr.split('\n').length, size: Buffer.byteLength(newStr, 'utf-8') };
         }
       }
-
-      // Auto-fix Python booleans for .py files (before no-op check so fixes apply even when LLM sends identical strings)
-      if (filePath.endsWith('.py')) newStr = fixPythonBooleans(newStr);
 
       if (oldStr === newStr) return { noChange: true, message: 'old_string and new_string are identical' };
 
@@ -1955,7 +1949,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
-${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via source tools. You are "LLM Workbench" — an Express-based chat app.\n\nSource tool workflow:\n1. Use source_project to switch to a different project directory (if needed — always do this BEFORE using other source tools on a non-default project)\n2. Use source_read to browse files (tree/read/grep)\n3. Use source_edit for ALL changes to existing files (targeted string replacement — always prefer this over source_write)\n4. Use source_write ONLY to create new files — never use it to modify existing files\n5. Use source_delete to remove files\n6. Use source_test to verify changes work\n7. Use source_git for version control\n\nPython files: true/false/null are auto-corrected to True/False/None in source_write and source_edit.` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via source tools. You are "LLM Workbench" — an Express-based chat app.\n\nSource tool workflow:\n1. Use source_project to switch to a different project directory (if needed — always do this BEFORE using other source tools on a non-default project)\n2. Use source_read to browse files (tree/read/grep)\n3. Use source_edit for ALL changes to existing files (targeted string replacement — always prefer this over source_write)\n4. Use source_write ONLY to create new files — never use it to modify existing files\n5. Use source_delete to remove files\n6. Use source_test to verify changes work\n7. Use source_git for version control\n\nIMPORTANT: When writing Python code, use correct Python syntax — True, False, None (not JavaScript true, false, null).` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
