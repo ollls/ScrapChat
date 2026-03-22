@@ -917,8 +917,10 @@ const tools = {
         }
       }
 
-      // Auto-fix Python booleans for .py files
+      // Auto-fix Python booleans for .py files (before no-op check so fixes apply even when LLM sends identical strings)
       if (filePath.endsWith('.py')) newStr = fixPythonBooleans(newStr);
+
+      if (oldStr === newStr) return { noChange: true, message: 'old_string and new_string are identical' };
 
       // EDIT mode
       return withFileLock(full, async () => {
@@ -936,7 +938,6 @@ const tools = {
         if (Buffer.byteLength(content, 'utf-8') > 1024 * 1024) {
           return { error: `File too large (${Buffer.byteLength(content, 'utf-8')} bytes) — use run_command with sed for large files` };
         }
-        if (oldStr === newStr) return { noChange: true, message: 'old_string and new_string are identical' };
         if (oldStr.includes('[truncated]')) {
           return { warning: 'old_string contains "[truncated]" — this is a truncation marker from source_read, not actual file content. Re-read the file to get the real text.' };
         }
