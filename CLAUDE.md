@@ -99,7 +99,8 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 - `ETRADE_CONSUMER_KEY` / `ETRADE_CONSUMER_SECRET` — E*TRADE OAuth credentials
 - `ETRADE_SANDBOX` — `true` for sandbox mode
 - `LOCATION` — default user location for weather/travel queries and `{$location}` macro
-- `SOURCE_DIR` — project root path for `source_read` tool (self-awareness)
+- `SOURCE_DIR` — project root path for source tools (self-awareness + code editing)
+- `SOURCE_TEST` — test command for `source_test` tool (e.g. `npm test`, `pytest -x`, `cargo test`)
 
 ## Tool System
 Prompt-based tool calling: system prompt defines `<tool_call>` protocol. Backend loops up to 20 rounds executing tools and feeding results back until LLM produces a final answer. Tool-call rounds stream content as `{tool_content}` SSE events for user feedback. Final answer sent as `{content}` SSE event.
@@ -130,6 +131,7 @@ Safety mechanisms:
 | `source_edit` | Targeted edits: exact string replacement with uniqueness check, whitespace fallback, diff preview, file locking. Scoped to SOURCE_DIR |
 | `source_delete` | Delete source files (e.g. during refactors). Confirmation required. Scoped to SOURCE_DIR |
 | `source_git` | Git commands with safety tiers: read-only (no confirm), local writes (confirm/autorun), remote (always confirm), destructive (blocked). cwd=SOURCE_DIR |
+| `source_test` | Run project test command (SOURCE_TEST env var). No params, no confirmation, 120s timeout. Language-agnostic |
 | `etrade_account` | E*TRADE: accounts, portfolio, transactions, orders, alerts, quotes, option chains/expiry, symbol lookup |
 | `hotel` | LiteAPI: hotel search, details, rates, reviews, semantic search |
 | `travel` | LiteAPI: weather, places, countries, cities, IATA codes, price index |
@@ -205,6 +207,7 @@ All three dropdown menus (Prompts, Sessions, Templates) share the same UI patter
 - `source_edit` tool: targeted string replacement with uniqueness enforcement, whitespace fallback, diff preview in confirmation, per-file mutex for concurrent safety
 - `source_delete` tool: remove source files with confirmation, directory protection (files only)
 - `source_git` tool: git commands with safety tiers — read-only (no confirm), local writes (confirm/autorun), remote (always confirm), destructive ops blocked
+- `source_test` tool: runs `SOURCE_TEST` command in source dir, no confirmation needed, 120s timeout, language-agnostic
 - Path-escape protection on all source tools: resolved paths must start with `sourceRoot`
 - System prompt includes "Self-Awareness" section when `SOURCE_DIR` configured
 - No confirmation needed — read-only access scoped to source directory

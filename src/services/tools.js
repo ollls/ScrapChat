@@ -1043,6 +1043,37 @@ const tools = {
       });
     },
   },
+  source_test: {
+    description: 'Run the project\'s test/check command to verify code changes work. No parameters needed — runs the command configured in SOURCE_TEST env var.\n\n'
+      + 'Call this after making code changes with source_edit or source_write to catch errors early. '
+      + 'If tests fail, review the output, fix the issue with source_edit, and run source_test again.',
+    parameters: {},
+    execute: async () => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!config.sourceTest) return { error: 'SOURCE_TEST not configured in .env — set it to your project\'s test command (e.g. "npm test", "pytest -x", "cargo test", "go test ./...")' };
+
+      const sourceRoot = resolve(config.sourceDir);
+      const { exec } = await import('child_process');
+      return new Promise((res) => {
+        exec(config.sourceTest, {
+          cwd: sourceRoot,
+          encoding: 'utf-8',
+          timeout: 120000,
+          maxBuffer: 2 * 1024 * 1024,
+        }, (err, stdout, stderr) => {
+          const exitCode = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
+          const timedOut = err?.killed || false;
+          res({
+            command: config.sourceTest,
+            exitCode,
+            passed: exitCode === 0,
+            stdout: (stdout || '').slice(0, 8000),
+            stderr: ((stderr || '') + (timedOut ? '\n[source_test] killed: exceeded 120s timeout' : '')).slice(0, 4000),
+          });
+        });
+      });
+    },
+  },
   run_command: {
     description: 'Run a shell command on the server. Requires user approval before execution. Requires a "command" argument (the shell command to run). Use for tasks like listing files, checking system info, installing packages, or any shell operation the user requests.',
     parameters: { command: 'string' },
@@ -1836,7 +1867,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
-${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read, source_edit, and source_write tools. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation, source_edit for targeted changes, source_write to create or fully replace files, source_delete to remove files, and source_git for version control.` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via the source_read, source_edit, and source_write tools. You are "LLM Workbench" — an Express-based chat app. Use source_read to review your implementation, source_edit for targeted changes, source_write to create or fully replace files, source_delete to remove files, source_git for version control, and source_test to verify your changes work.` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
