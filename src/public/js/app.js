@@ -186,6 +186,10 @@ const api = {
     const res = await fetch(`/api/conversations/${id}/unpin`, { method: 'POST' });
     return res.json();
   },
+  async compactConversation(id) {
+    const res = await fetch(`/api/conversations/${id}/compact`, { method: 'POST' });
+    return res.json();
+  },
 };
 
 // ── Sidebar ───────────────────────────────────────────
@@ -253,8 +257,40 @@ function renderSidebar() {
       }
     });
 
+    // Compact button — only for pinned conversations with messages
+    let compactBtn = null;
+    if (conv.pinned && (conv.messageCount || 0) > 2) {
+      compactBtn = document.createElement('button');
+      compactBtn.className = 'text-zinc-600 hover:text-cyan-400 px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer';
+      compactBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/></svg>';
+      compactBtn.title = 'Compact — LLM summarizes conversation';
+      let compactConfirmTimeout = null;
+      compactBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (compactBtn.dataset.confirm) {
+          clearTimeout(compactConfirmTimeout);
+          compactBtn.textContent = '...';
+          compactBtn.disabled = true;
+          await api.compactConversation(conv.id);
+          if (conv.id === state.currentConversationId) {
+            const updated = await api.getConversation(conv.id);
+            renderMessages(updated.messages);
+          }
+          await refreshSidebar();
+        } else {
+          compactBtn.dataset.confirm = '1';
+          compactBtn.innerHTML = '<span class="text-red-400 text-xs font-medium">Compact?</span>';
+          compactConfirmTimeout = setTimeout(() => {
+            delete compactBtn.dataset.confirm;
+            compactBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/></svg>';
+          }, 3000);
+        }
+      });
+    }
+
     item.addEventListener('click', () => switchConversation(conv.id));
     item.appendChild(title);
+    if (compactBtn) item.appendChild(compactBtn);
     item.appendChild(pinBtn);
     item.appendChild(delBtn);
     sidebar.appendChild(item);
@@ -2397,7 +2433,15 @@ saveSessionBtn.addEventListener('click', async () => {
 
 // ── Init ──────────────────────────────────────────────
 (async function init() {
-  try { const cfg = await (await fetch('/api/config')).json(); state.location = cfg.location || ''; } catch {}
+  try {
+    const cfg = await (await fetch('/api/config')).json();
+    state.location = cfg.location || '';
+    if (cfg.terminal) {
+      const termBtn = document.getElementById('terminal-btn');
+      termBtn.classList.remove('hidden');
+      termBtn.addEventListener('click', () => fetch('/api/terminal', { method: 'POST' }));
+    }
+  } catch {}
   await refreshSidebar();
   // Restore active session from localStorage
   if (state.currentConversationId) {

@@ -1,6 +1,7 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
+import { exec } from 'child_process';
 import config from './config.js';
 import conversationRoutes from './routes/conversations.js';
 import slotRoutes from './routes/slots.js';
@@ -32,7 +33,25 @@ app.use('/api/templates', templateRoutes);
 app.use('/api/sessions', sessionRoutes);
 
 app.get('/api/config', (_req, res) => {
-  res.json({ location: config.location });
+  res.json({ location: config.location, terminal: !!config.terminal });
+});
+
+app.post('/api/terminal', (_req, res) => {
+  if (!config.terminal) return res.status(400).json({ error: 'TERMINAL not configured in .env' });
+  const cwd = config.sourceDir ? resolve(config.sourceDir) : process.env.HOME;
+  const term = config.terminal;
+  // Terminal-specific working directory flags
+  const cwdFlags = {
+    'cosmic-term': `-w "${cwd}"`,
+    'kitty': `-d "${cwd}"`,
+    'alacritty': `--working-directory "${cwd}"`,
+  };
+  const bin = term.split('/').pop(); // handle full paths like /usr/bin/cosmic-term
+  const flag = cwdFlags[bin] || `--working-directory="${cwd}"`;
+  exec(`${term} ${flag}`, (err) => {
+    if (err) console.warn('[terminal]', err.message);
+  });
+  res.json({ ok: true, cwd });
 });
 
 app.get('/', (_req, res) => {

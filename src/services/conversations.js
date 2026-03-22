@@ -61,8 +61,8 @@ function create(title) {
 function list() {
   return [...store.values()]
     .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.updatedAt.localeCompare(a.updatedAt))
-    .map(({ id, title, slotId, tokenCount, pinned, createdAt, updatedAt }) => ({
-      id, title, slotId, tokenCount, pinned, createdAt, updatedAt,
+    .map(({ id, title, slotId, tokenCount, pinned, messages, createdAt, updatedAt }) => ({
+      id, title, slotId, tokenCount, pinned, messageCount: messages.length, createdAt, updatedAt,
     }));
 }
 
@@ -134,8 +134,18 @@ function unpin(id) {
   return conv;
 }
 
+function compact(id, summary) {
+  const conv = store.get(id);
+  if (!conv) return null;
+  conv.messages = [{ role: 'assistant', content: summary }];
+  conv.tokenCount = 0;
+  conv.updatedAt = new Date().toISOString();
+  if (conv.pinned) savePinned(id);
+  return conv;
+}
+
 export default {
   create, list, get, remove, updateTitle,
   addMessage, updateMessageContent, setSlot, setTokenCount,
-  pin, unpin,
+  pin, unpin, compact,
 };
