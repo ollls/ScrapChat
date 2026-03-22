@@ -14,6 +14,12 @@ const state = {
   location: '', // from server config (LOCATION env var)
 };
 
+// Dark session colors that are unreadable on dark backgrounds → lighter text variants
+function textSafeColor(color) {
+  const lightMap = { '#1b2a4a': '#6B8FBF' };
+  return lightMap[(color || '').toLowerCase()] || color;
+}
+
 let _elapsedInterval = null;
 function startElapsedTimer() {
   const t0 = Date.now();
@@ -192,7 +198,7 @@ function renderSidebar() {
     const convSession = state.sessionColors[conv.id];
     if (convSession) {
       const c = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${convSession}`).trim();
-      if (c) title.style.color = c;
+      if (c) title.style.color = textSafeColor(c);
     }
 
     const pinBtn = document.createElement('button');
@@ -1724,7 +1730,7 @@ function renderSessions(sessions) {
     titleSpan.className = 'flex-1 text-xs';
     titleSpan.textContent = s.title || s.text.slice(0, 60);
     const cssVar = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${s.color}`).trim();
-    if (cssVar) titleSpan.style.color = cssVar;
+    if (cssVar) titleSpan.style.color = textSafeColor(cssVar);
 
     const editBtn = document.createElement('button');
     editBtn.className = 'text-zinc-600 hover:text-zinc-300 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
