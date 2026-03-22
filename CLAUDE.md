@@ -166,6 +166,7 @@ Safety mechanisms:
 | `source_edit` | Targeted edits: exact string replacement with uniqueness check, whitespace fallback, diff preview, file locking. Scoped to SOURCE_DIR |
 | `source_delete` | Delete source files (e.g. during refactors). Confirmation required. Scoped to SOURCE_DIR |
 | `source_git` | Git commands with safety tiers: read-only (no confirm), local writes (confirm/autorun), remote (always confirm), destructive (blocked). cwd=SOURCE_DIR |
+| `source_run` | Run shell commands in source project dir (e.g. python3 script.py, npm run build). Confirmation/autorun, 120s timeout |
 | `source_test` | Run project test command (SOURCE_TEST env var). No params, no confirmation, 120s timeout. Language-agnostic |
 | `source_project` | Switch source tools to a different project directory. Always requires confirmation. Actions: switch, reset, status |
 | `etrade_account` | E*TRADE: accounts, portfolio, transactions, orders, alerts, quotes, option chains/expiry, symbol lookup |
@@ -246,6 +247,7 @@ Full coding assistance suite scoped to `SOURCE_DIR`. All path-based tools enforc
 - `source_edit`: targeted string replacement. Uniqueness enforced (error with match locations if >1). Whitespace fallback for indentation mismatches. Per-file mutex for concurrent safety. Diff preview in confirmation and result.
 - `source_delete`: remove files (directories blocked). Shows file size in confirmation. Diff preview in result.
 - `source_git`: git command runner with safety tiers — safe (status/diff/log/show/blame: no confirm), local writes (add/commit/branch/checkout/stash/merge/tag: confirm/autorun), remote (push/pull/fetch: always confirm), blocked (reset --hard, push --force, clean -f, rebase).
+- `source_run` tool: run any shell command in source project dir (e.g. `python3 script.py`, `npm run build`), confirmation/autorun, 120s timeout
 - `source_test`: runs `SOURCE_TEST` env var command in source dir. No parameters, no confirmation needed, 120s timeout. Language-agnostic (npm test, pytest, cargo test, etc.).
 
 **Diff preview system:** `source_write`, `source_edit`, and `source_delete` include `_diff` field in results. Frontend renders color-coded diff blocks (green=added, red=removed, cyan=hunk headers). `_diff` stripped from LLM context to save tokens. Diffs shown in both confirmation prompt and tool_use display (visible even with autorun).

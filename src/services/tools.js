@@ -1131,6 +1131,50 @@ const tools = {
       });
     },
   },
+  source_run: {
+    description: 'Run a shell command in the source project directory. Use this to execute scripts, build commands, or any shell operation in the project.\n\n'
+      + 'Examples: "python3 colorful_text.py", "npm run build", "make", "go run main.go"\n\n'
+      + 'Requires user approval unless autorun is enabled.',
+    parameters: {
+      command: 'string (shell command to run in the source project directory)',
+    },
+    execute: async ({ command }, context) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!command?.trim()) return { error: 'command is required' };
+      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
+
+      const sourceRoot = resolve(config.sourceDir);
+      let approved;
+      if (context.autorun) {
+        console.log(`[source_run] autorun enabled, skipping confirmation`);
+        approved = true;
+      } else {
+        approved = await context.confirmFn(`Run in ${sourceRoot}:\n${command}`);
+      }
+      if (!approved) return { denied: true, message: 'User denied command.' };
+
+      const { exec } = await import('child_process');
+      return new Promise((res) => {
+        exec(command, {
+          cwd: sourceRoot,
+          encoding: 'utf-8',
+          timeout: 120000,
+          maxBuffer: 2 * 1024 * 1024,
+        }, (err, stdout, stderr) => {
+          if (err) {
+            res({
+              command,
+              exitCode: typeof err.code === 'number' ? err.code : 1,
+              stdout: tagLineCount(stdout, 8000),
+              stderr: ((stderr || '') + (err.killed ? '\n[source_run] killed: exceeded 120s timeout' : '')).slice(0, 4000),
+            });
+          } else {
+            res({ command, exitCode: 0, stdout: tagLineCount(stdout, 8000), stderr: (stderr || '').slice(0, 4000) });
+          }
+        });
+      });
+    },
+  },
   source_test: {
     description: 'Run the project\'s test/check command to verify code changes work. No parameters needed — runs the command configured in SOURCE_TEST env var.\n\n'
       + 'Call this after making code changes with source_edit or source_write to catch errors early. '
@@ -1949,7 +1993,7 @@ export function getSystemPrompt({ applets = false } = {}) {
 Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
 Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
-${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via source tools. You are "LLM Workbench" — an Express-based chat app.\n\nSource tool workflow:\n1. Use source_project to switch to a different project directory (if needed — always do this BEFORE using other source tools on a non-default project)\n2. Use source_read to browse files (tree/read/grep)\n3. Use source_edit for ALL changes to existing files (targeted string replacement — always prefer this over source_write)\n4. Use source_write ONLY to create new files — never use it to modify existing files\n5. Use source_delete to remove files\n6. Use source_test to verify changes work\n7. Use source_git for version control\n\nIMPORTANT: When writing Python code, use correct Python syntax — True, False, None (not JavaScript true, false, null).` : ''}
+${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via source tools. You are "LLM Workbench" — an Express-based chat app.\n\nSource tool workflow:\n1. Use source_project to switch to a different project directory (if needed — always do this BEFORE using other source tools on a non-default project)\n2. Use source_read to browse files (tree/read/grep)\n3. Use source_edit for ALL changes to existing files (targeted string replacement — always prefer this over source_write)\n4. Use source_write ONLY to create new files — never use it to modify existing files\n5. Use source_delete to remove files\n6. Use source_run to execute scripts and commands in the project directory\n7. Use source_test to verify changes work\n8. Use source_git for version control\n\nIMPORTANT: When writing Python code, use correct Python syntax — True, False, None (not JavaScript true, false, null).` : ''}
 
 ## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
 
