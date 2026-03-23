@@ -314,7 +314,7 @@ function optionChainsToCsv(data) {
       if (!opt) continue;
       const greeks = opt.OptionGreeks || {};
       rows.push([
-        type.toUpperCase(), opt.symbol || '', opt.strikePrice ?? '', opt.expiryDate || fallbackExpiry,
+        type, opt.symbol || '', opt.strikePrice ?? '', opt.expiryDate || fallbackExpiry,
         opt.bid ?? '', opt.ask ?? '', opt.lastPrice ?? '', opt.volume ?? '',
         opt.openInterest ?? '', greeks.iv ?? '',
         greeks.delta ?? '', greeks.gamma ?? '',
@@ -340,7 +340,7 @@ function optionChainsToMd(data) {
       if (!opt) continue;
       const greeks = opt.OptionGreeks || {};
       rows.push([
-        type.toUpperCase(), opt.strikePrice ?? '', opt.expiryDate || fallbackExpiry,
+        type, opt.strikePrice ?? '', opt.expiryDate || fallbackExpiry,
         opt.bid ?? '', opt.ask ?? '', opt.lastPrice ?? '', opt.volume ?? '',
         opt.openInterest ?? '', greeks.iv ?? '',
         greeks.delta ?? '', greeks.theta ?? '', opt.inTheMoney ?? '',
