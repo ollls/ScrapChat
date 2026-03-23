@@ -496,7 +496,7 @@ function renderFormattedContent(text, container, { renderMermaid = false } = {})
     const bubble = container.parentElement;
     if (bubble) {
       bubble.classList.remove('max-w-[80%]');
-      bubble.classList.add('max-w-[95%]');
+      bubble.classList.add('max-w-full', 'w-full');
     }
   }
 
