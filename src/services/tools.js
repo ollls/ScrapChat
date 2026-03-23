@@ -110,7 +110,7 @@ async function saveToFile(filename, content) {
   await mkdir(DATA_DIR, { recursive: true });
   const filePath = join(DATA_DIR, safe);
   await writeFile(filePath, content, 'utf-8');
-  return { url: `/files/${encodeURIComponent(safe)}`, filename: safe, size: Buffer.byteLength(content, 'utf-8') };
+  return { url: `/files/${encodeURIComponent(safe)}`, filename: safe, pythonPath: safe, size: Buffer.byteLength(content, 'utf-8') };
 }
 
 // ── Shared helpers ───────────────────────────────────
@@ -1534,7 +1534,7 @@ const tools = {
             ...summarize(action, result),
             savedFile: file,
             _autoSaved: true,
-            _note: `${rowCount} rows — auto-saved full data to ${autoFile}. Preview shows first 15 rows.`,
+            _note: `${rowCount} rows — auto-saved full data to ${autoFile}. Preview shows first 15 rows. In run_python use: pd.read_csv('${autoFile}') — just the filename, NOT /files/ path.`,
             ...(preview ? { _markdown: preview } : {}),
           };
           await _log(result, out);
