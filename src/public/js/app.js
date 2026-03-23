@@ -807,6 +807,7 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
             if (data.reasoning && state.thinkEnabled) {
               if (!hasReasoning) {
                 hasReasoning = true;
+                reasoningDetails.open = true;
                 bubble.insertBefore(reasoningDetails, contentSpan);
               }
               accumulatedReasoning += data.reasoning;
