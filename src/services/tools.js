@@ -110,7 +110,7 @@ async function saveToFile(filename, content) {
   await mkdir(DATA_DIR, { recursive: true });
   const filePath = join(DATA_DIR, safe);
   await writeFile(filePath, content, 'utf-8');
-  return { url: `/files/${encodeURIComponent(safe)}`, filename: safe, size: Buffer.byteLength(content, 'utf-8') };
+  return { url: `/files/${encodeURIComponent(safe)}`, filename: safe, pythonPath: safe, size: Buffer.byteLength(content, 'utf-8') };
 }
 
 // ── Shared helpers ───────────────────────────────────
@@ -1534,7 +1534,7 @@ const tools = {
             ...summarize(action, result),
             savedFile: file,
             _autoSaved: true,
-            _note: `${rowCount} rows — auto-saved full data to ${autoFile}. Preview shows first 15 rows.`,
+            _note: `${rowCount} rows — auto-saved full data to ${autoFile}. Preview shows first 15 rows. In run_python use: pd.read_csv('${autoFile}') — just the filename, NOT /files/ path.`,
             ...(preview ? { _markdown: preview } : {}),
           };
           await _log(result, out);
@@ -2138,7 +2138,8 @@ Tool rules:
 - EXISTING POSITIONS IV/Greeks: When the user asks about IV, Greeks, or details on options they ALREADY HOLD (e.g. "check my MU option's IV", "what's the delta on my calls"), do NOT fetch the full option chain or expiry list. Instead: (1) call "portfolio" with accountIdKey matching the account description (e.g. "IRA", "brokerage" — auto-resolved, no need to call "list" first) to see their exact positions (symbol, strike, expiry), (2) call "optionchains" with the EXACT expiryYear/expiryMonth/expiryDay and strikePriceNear matching the held position's strike, with noOfStrikes=3 to get a narrow slice. This returns IV and Greeks in just 2 rounds. NEVER call optionexpiry when the user already has positions — the expiry is in the portfolio data. NEVER call "list" just to look up an accountIdKey — pass the account description directly.
 - General options analysis workflow (IV surface, term structure, "show all options"): (1) get current price with "quote" + available expirations with "optionexpiry" in parallel (ONE round), (2) immediately fetch "optionchains" — do NOT re-fetch quote or expiry dates you already have. For multi-expiry analysis, fetch up to 3 chains in parallel in ONE round, each with saveAs (e.g. saveAs: "MU_chain_apr17.csv"). Use strikePriceNear + noOfStrikes to limit each chain to ~20 strikes near ATM — do NOT fetch full chains for multi-expiry analysis as the combined data will be too large. You have limited tool rounds — NEVER waste rounds repeating calls you already made. (3) In the NEXT round (not the same round!), use run_python on the saved CSVs. NEVER mix optionchains + run_python in the same round — run_python executes in parallel and the files won't exist yet. NEVER guess prices, expiration dates, or Greeks — always fetch real data first.
 - CRITICAL: Only present strike prices, premiums, and Greeks that appear EXACTLY in the tool results. NEVER interpolate, extrapolate, or invent strikes between the ones returned. If the chain shows strikes at 420 and 430, do NOT fabricate a 425 strike. Present only real data rows from the tool output.
-- OPTION CHAIN DISPLAY: When fetching option chains for a single expiry, use strikePriceNear (set to current stock price) and noOfStrikes=25 to get ~25 strikes centered around ATM. Do NOT omit both — the API returns hundreds of deep ITM/OTM strikes that are useless. Do NOT use noOfStrikes=10 — too few. When presenting option chain data, display ALL returned strikes in the table — do NOT cherry-pick or truncate. The user needs the complete picture to make trading decisions.
+- OPTION CHAIN DISPLAY: When presenting option chain data, display ALL returned strikes in the table — do NOT cherry-pick or truncate. The user needs the complete picture to make trading decisions.
+- OPTION CHAIN FETCHING: When the user asks for a specific delta range, covered calls, or any filtered view of options — fetch the FULL chain for that expiry (omit noOfStrikes, omit strikePriceNear), save to CSV with saveAs, then use run_python to filter by delta/strike/etc. ONE fetch + ONE filter = done. Do NOT crawl through multiple strikePriceNear values — that wastes rounds. For simple "show me the chain" requests, use strikePriceNear (current price) + noOfStrikes=25 to get ~25 strikes around ATM.
 - RANKING/FILTERING option chains: When the user asks for "most popular", "highest volume", "top N by OI", or any ranking/filtering of options — you MUST fetch the FULL chain (do NOT use noOfStrikes to limit). The full chain will auto-save to CSV. Then use run_python to sort/filter the CSV and find the answer. You cannot determine "most popular" from a subset — you need all strikes to compare. Example: fetch full chain with saveAs → run_python to sort by Open Interest or Volume → present top N results.
 - When analyzing options positions from etrade_account, ALWAYS use the current date/time (provided above) to calculate days-to-expiry. Never estimate or guess expiration dates — compute them from the portfolio data. Verify your time-to-expiry math before reporting. Common covered call strategies use ~30-day income-generating calls, not imminent expirations — frame your analysis accordingly.
 
@@ -2520,7 +2521,7 @@ export async function executeTool(name, args, context) {
     if (loggableArgs.content && loggableArgs.content.length > 200) loggableArgs.content = loggableArgs.content.slice(0, 200) + '...[truncated]';
     if (loggableArgs.new_string && loggableArgs.new_string.length > 200) loggableArgs.new_string = loggableArgs.new_string.slice(0, 200) + '...[truncated]';
     if (loggableArgs.old_string && loggableArgs.old_string.length > 200) loggableArgs.old_string = loggableArgs.old_string.slice(0, 200) + '...[truncated]';
-    if (loggableArgs.code && loggableArgs.code.length > 200) loggableArgs.code = loggableArgs.code.slice(0, 200) + '...[truncated]';
+    if (loggableArgs.code && loggableArgs.code.length > 2000) loggableArgs.code = loggableArgs.code.slice(0, 2000) + '...[truncated]';
     logToolCall(name, action, { args: loggableArgs, rawResult: loggableResult, formattedResult: loggableResult });
     return JSON.stringify(result);
   } catch (err) {

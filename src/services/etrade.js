@@ -234,8 +234,8 @@ async function getOptionChains({ symbol, expiryYear, expiryMonth, expiryDay, str
   if (expiryYear) params.set('expiryYear', expiryYear);
   if (expiryMonth) params.set('expiryMonth', expiryMonth);
   if (expiryDay) params.set('expiryDay', expiryDay);
-  if (strikePriceNear) params.set('strikePriceNear', strikePriceNear);
-  if (noOfStrikes) params.set('noOfStrikes', noOfStrikes);
+  if (strikePriceNear && strikePriceNear !== 'null' && Number(strikePriceNear) > 0) params.set('strikePriceNear', strikePriceNear);
+  if (noOfStrikes && noOfStrikes !== 'null' && Number(noOfStrikes) > 0) params.set('noOfStrikes', noOfStrikes);
   if (includeWeekly) params.set('includeWeekly', 'true');
   if (skipAdjusted) params.set('skipAdjusted', 'true');
   const data = await apiGet(`/v1/market/optionchains.json?${params}`);
