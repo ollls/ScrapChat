@@ -859,6 +859,18 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
               responseArea.scrollTop = responseArea.scrollHeight;
             }
             if (data.tool_use) {
+              // Update source dir label when project is switched
+              if (data.tool_use.name === 'source_project') {
+                try {
+                  const r = JSON.parse(data.tool_use.result);
+                  if (r.switched || r.current) {
+                    const dir = r.current || '';
+                    const short = dir.replace(/^\/home\/[^/]+/, '~');
+                    const projBtn = document.getElementById('project-btn');
+                    projBtn.title = 'Project: ' + short;
+                  }
+                } catch {}
+              }
               // Clear status and "Working..." indicators when a tool result arrives
               const statusMsg = toolUseContainer.querySelector('.tool-status-msg');
               if (statusMsg) statusMsg.remove();
@@ -2450,6 +2462,16 @@ saveSessionBtn.addEventListener('click', async () => {
   try {
     const cfg = await (await fetch('/api/config')).json();
     state.location = cfg.location || '';
+    if (cfg.sourceDir) {
+      const short = cfg.sourceDir.replace(/^\/home\/[^/]+/, '~');
+      state.sourceDir = short;
+      const projBtn = document.getElementById('project-btn');
+      projBtn.title = 'Project: ' + short;
+      projBtn.classList.remove('hidden');
+      if (cfg.terminal) {
+        projBtn.addEventListener('click', () => fetch('/api/terminal', { method: 'POST' }));
+      }
+    }
     if (cfg.terminal) {
       const termBtn = document.getElementById('terminal-btn');
       termBtn.classList.remove('hidden');

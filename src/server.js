@@ -33,7 +33,7 @@ app.use('/api/templates', templateRoutes);
 app.use('/api/sessions', sessionRoutes);
 
 app.get('/api/config', (_req, res) => {
-  res.json({ location: config.location, terminal: !!config.terminal });
+  res.json({ location: config.location, terminal: !!config.terminal, sourceDir: config.sourceDir || '' });
 });
 
 app.post('/api/terminal', (_req, res) => {
