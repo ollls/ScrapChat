@@ -4,6 +4,7 @@ import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion } from '../services/llm.js';
 import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
+import { getCompactByColor } from '../services/compacts.js';
 
 const router = Router();
 
@@ -72,18 +73,12 @@ router.post('/:id/compact', async (req, res) => {
   }).join('\n\n');
 
   try {
-    const { content: summary } = await collectChatCompletion([
-      {
-        role: 'system',
-        content: `You are summarizing a coding/work session. Create a compact summary that preserves:
-- What was accomplished (files created, modified, deleted)
-- Key decisions and why they were made
-- What worked and what failed (so mistakes aren't repeated)
-- Current state of the project
-- Any unfinished tasks or next steps
+    const { color } = req.body || {};
+    const compactPrompt = color ? getCompactByColor(color) : null;
+    if (!compactPrompt) return res.status(400).json({ error: 'No compact prompt configured for this session color' });
 
-Format as a brief structured summary with sections. Be concise — this replaces the full conversation. Drop all back-and-forth, debugging noise, and intermediate tool outputs. Focus on outcomes and lessons.`
-      },
+    const { content: summary } = await collectChatCompletion([
+      { role: 'system', content: compactPrompt.text },
       { role: 'user', content: transcript.slice(0, 12000) },
     ], { signal: AbortSignal.timeout(60000), maxTokens: 2000 });
 
@@ -115,7 +110,7 @@ router.post('/:id/messages', async (req, res) => {
   const images = req.body.images; // [{ mimeType, base64 }]
   const applets = !!req.body.applets;
   const autorun = !!req.body.autorun;
-  const hidden = !!req.body.hidden;
+  const sessionInit = !!req.body.sessionInit;
   if (!content && (!images || images.length === 0)) {
     return res.status(400).json({ error: 'Content is required' });
   }
@@ -135,7 +130,14 @@ router.post('/:id/messages', async (req, res) => {
     console.log(`[template] expanding "${tplName}" → ${tpl ? `found (${tpl.html.length} chars)` : 'NOT FOUND'}`);
     if (tpl) {
       content = content.replace(match[0],
-        `\n\nUse this saved HTML applet template — output it as an <applet type="${tpl.type}"> block. Fetch fresh data using the appropriate tools first, then populate the template with the new data. Update ALL dates, values, and content to reflect the fresh data. Keep the layout, styling, and structure intact:\n\`\`\`html\n${tpl.html}\n\`\`\``
+        `\n\nUse this saved HTML applet template as the EXACT base — output it as an <applet type="${tpl.type}"> block.
+Copy the template's HTML, CSS, and JavaScript VERBATIM. Only modify data values, dates, and dynamic content that need updating.
+If no fresh data is needed, output the template UNCHANGED.
+Do NOT redesign, restyle, or reimagine the template.
+Do NOT change colors, dimensions, font choices, CSS properties, class names, IDs, or DOM structure.
+If the user's message requests changes, apply ONLY those specific changes to the template.
+Fetch fresh data using the appropriate tools first if the content requires it, then populate the template with the new data.
+\`\`\`html\n${tpl.html}\n\`\`\``
       );
     }
   }
@@ -427,25 +429,16 @@ router.post('/:id/messages', async (req, res) => {
         llmMessages.push({ role: 'assistant', content: result.content });
         const roundsLeft = MAX_TOOL_ROUNDS - round - 1;
 
-        // Track chain completions and files saved THIS round
-        const roundSavedFiles = [];
+        // Track chain completions
         for (const tc of toolCallsFound) {
           if (tc.arguments?.action === 'optionchains') hadChainData = true;
           if (tc.arguments?.action === 'optionexpiry') hadExpiryCall = true;
         }
-        for (const r of results) {
-          try {
-            const p = JSON.parse(r);
-            if (p.savedFile?.filename) roundSavedFiles.push(p.savedFile.filename);
-          } catch {}
-        }
 
         // Directive: nudge LLM toward next step based on this round's results
         let directive = '';
-        if (roundSavedFiles.length > 0) {
-          directive = `This round saved: ${roundSavedFiles.join(', ')}. Use run_python to analyze these files. Do NOT re-fetch data you already have.`;
-        } else if (hadExpiryCall && !hadChainData) {
-          directive = 'NOW call optionchains (with saveAs and strikePriceNear) for the expiries you need. Do NOT re-fetch quote or optionexpiry.';
+        if (hadExpiryCall && !hadChainData) {
+          directive = 'NOW call optionchains (with strikePriceNear) for the expiries you need. Do NOT re-fetch quote or optionexpiry.';
         }
 
         const toolReminder = `\n\nRounds left: ${roundsLeft}.${directive ? ' ' + directive : ''} REMINDER: tool calls MUST use <tool_call></tool_call> tags.`;
@@ -611,8 +604,8 @@ router.post('/:id/messages', async (req, res) => {
   res.write('data: [DONE]\n\n');
   res.end();
 
-  // Auto-title from first visible user message (skip hidden session prompts)
-  if (!hidden) {
+  // Auto-title from first visible user message (skip session init prompts)
+  if (!sessionInit) {
     const updated = conversations.get(conv.id);
     if (updated && updated.title === 'New conversation') {
       const text = typeof content === 'string' ? content : content.text;

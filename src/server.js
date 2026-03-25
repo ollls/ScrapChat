@@ -13,6 +13,7 @@ import promptRoutes from './routes/prompts.js';
 import toolRoutes from './routes/tools.js';
 import templateRoutes from './routes/templates.js';
 import sessionRoutes from './routes/sessions.js';
+import compactRoutes from './routes/compacts.js';
 import slots from './services/slots.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -23,7 +24,6 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(join(__dirname, 'public')));
-app.use('/files', express.static(join(__dirname, '..', 'data')));
 
 app.use('/api/conversations', conversationRoutes);
 app.use('/api/slots', slotRoutes);
@@ -33,6 +33,7 @@ app.use('/api/prompts', promptRoutes);
 app.use('/api/tools', toolRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/sessions', sessionRoutes);
+app.use('/api/compacts', compactRoutes);
 
 app.get('/api/config', (_req, res) => {
   res.json({ location: config.location, terminal: !!config.terminal, sourceDir: config.sourceDir || '' });

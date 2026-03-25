@@ -12,6 +12,7 @@ import config from '../config.js';
 const originalSourceDir = config.sourceDir;
 import etrade from './etrade.js';
 import liteapi from './liteapi.js';
+import { listTemplates, getTemplateByName } from './templates.js';
 
 const __dirname = import.meta.dirname || (() => { const f = fileURLToPath(import.meta.url); return f.substring(0, f.lastIndexOf('/')); })();
 const DATA_DIR = resolve(__dirname, '../../data');
@@ -102,16 +103,6 @@ async function logToolCall(toolName, action, { args, rawResult, formattedResult 
   }
 }
 const PYTHON_VENV = (config.python.venvPath || '').replace(/^~/, homedir());
-
-// ── File save helper ─────────────────────────────────
-async function saveToFile(filename, content) {
-  const safe = basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
-  if (!safe || safe.startsWith('.')) return { error: `Invalid filename: ${filename}` };
-  await mkdir(DATA_DIR, { recursive: true });
-  const filePath = join(DATA_DIR, safe);
-  await writeFile(filePath, content, 'utf-8');
-  return { url: `/files/${encodeURIComponent(safe)}`, filename: safe, size: Buffer.byteLength(content, 'utf-8') };
-}
 
 // ── Shared helpers ───────────────────────────────────
 function formatExpiry(p) {
@@ -655,54 +646,6 @@ const tools = {
       return { url, title, content: markdown };
     },
   },
-  save_file: {
-    description: 'Save content to a file for download. Requires "filename" (e.g. "report.md", "data.csv") and "content" (the text content to save). Returns a download URL. Use for generated text, reports, code, or small data sets. Avoid for large data (50+ records) — use the source tool\'s saveAs parameter instead to prevent output truncation.',
-    parameters: { filename: 'string', content: 'string' },
-    execute: async ({ filename, content }) => {
-      if (!filename || !content) return { error: 'Both "filename" and "content" are required.' };
-      return await saveToFile(filename, content);
-    },
-  },
-  list_files: {
-    description: 'List saved files. No arguments needed. Returns filename, size, and last modified date for each file.',
-    parameters: {},
-    execute: async () => {
-      await mkdir(DATA_DIR, { recursive: true });
-      const entries = await readdir(DATA_DIR);
-      const files = await Promise.all(entries.map(async (name) => {
-        const s = await stat(join(DATA_DIR, name));
-        if (!s.isFile()) return null;
-        return { name, size: s.size, modified: s.mtime.toISOString() };
-      }));
-      return files.filter(Boolean);
-    },
-  },
-  file_read: {
-    description: 'Read contents of a saved file. Requires "filename". Optional "head" (number of lines from start). Use to inspect CSVs, downloaded files, or results from other tools.',
-    parameters: { filename: 'string', head: 'number (optional)' },
-    execute: async ({ filename, head }) => {
-      if (!filename?.trim()) return { error: 'filename is required' };
-      const safe = basename(filename).replace(/[^a-zA-Z0-9._-]/g, '_');
-      const filePath = join(DATA_DIR, safe);
-      try {
-        let content = await readFile(filePath, 'utf-8');
-        const lines = content.split('\n');
-        const totalLines = lines.length;
-        if (head && head > 0) {
-          content = lines.slice(0, head).join('\n');
-        } else if (safe.endsWith('.csv') && totalLines > 10) {
-          // For CSV files, show header + 5 rows — use run_python to process the full data
-          content = lines.slice(0, 6).join('\n');
-          content += `\n... (${totalLines - 6} more rows)\n[Use run_python with pd.read_csv('${safe}') to process this data. Do NOT attempt to analyze it by reading — use Python.]`;
-        }
-        if (content.length > 10000) content = content.slice(0, 10000) + '\n...[truncated]';
-        return { filename: safe, totalLines, content };
-      } catch (err) {
-        if (err.code === 'ENOENT') return { error: `File not found: ${safe}` };
-        return { error: err.message };
-      }
-    },
-  },
   source_project: {
     description: 'Switch the source code working directory to a different project. All source tools (source_read, source_write, source_edit, source_delete, source_git, source_test) will operate on the new directory.\n\n'
       + 'Actions:\n'
@@ -848,6 +791,63 @@ const tools = {
         }
         default:
           return { error: 'Unknown action. Use: tree, read, grep' };
+      }
+    },
+  },
+  template_save: {
+    description: 'Save a stored applet template as a file in the source project directory. Use this when the user asks to copy/extract/export a template to a file.\n\n'
+      + 'Parameters:\n'
+      + '- "name": template name (case-insensitive lookup)\n'
+      + '- "path": relative file path to save to (e.g. "watch.html"). Defaults to "<name>.html"\n\n'
+      + 'Lists available templates if name not found. Requires user approval unless autorun is enabled.',
+    parameters: {
+      name: 'string (template name)',
+      path: 'string (optional, relative file path)',
+    },
+    execute: async ({ name, path: filePath }, context) => {
+      if (!config.sourceDir) return { error: 'SOURCE_DIR not configured in .env' };
+      if (!name?.trim()) {
+        const all = listTemplates();
+        if (!all.length) return { error: 'No templates saved' };
+        return { error: 'name is required', available: all.map(t => t.name) };
+      }
+
+      const tpl = getTemplateByName(name.trim());
+      if (!tpl) {
+        const all = listTemplates();
+        return { error: `Template "${name}" not found`, available: all.map(t => t.name) };
+      }
+
+      const safeName = tpl.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+      if (!filePath?.trim()) filePath = `${safeName}.html`;
+
+      const sourceRoot = resolve(config.sourceDir);
+      const full = resolve(sourceRoot, filePath);
+      if (!full.startsWith(sourceRoot)) return { error: 'Path escapes source directory' };
+
+      const content = tpl.html;
+      let oldContent = '';
+      try { oldContent = await readFile(full, 'utf-8'); } catch {}
+      const diff = simpleDiff(oldContent, content, filePath);
+
+      let approved;
+      if (context.autorun) {
+        console.log(`[template_save] autorun enabled, skipping confirmation`);
+        approved = true;
+      } else {
+        approved = await context.confirmFn(`Save template "${tpl.name}" to: ${filePath}\n${diff}`);
+      }
+      if (!approved) return { denied: true, message: 'User denied template save.' };
+
+      try {
+        const { dirname: dirnameFn } = await import('path');
+        const { mkdir: mkdirFn, writeFile: writeFn } = await import('fs/promises');
+        await mkdirFn(dirnameFn(full), { recursive: true });
+        await writeFn(full, content, 'utf-8');
+        const lines = content.split('\n').length;
+        return { template: tpl.name, path: filePath, lines, size: Buffer.byteLength(content, 'utf-8'), _diff: diff };
+      } catch (err) {
+        return { error: err.message };
       }
     },
   },
@@ -1284,7 +1284,7 @@ const tools = {
     },
   },
   run_python: {
-    description: 'Execute a Python script. Requires user approval. Requires "code" (Python source). The script runs in the same directory as saved files, so it can read/write them directly by filename. Any new or modified files are auto-detected and returned with download URLs.\n\nOutput rules:\n- Quick answers (single number, short list, yes/no) → print() to console.\n- Reports, tables, formatted results → save to a file (CSV, MD, or HTML) AND print() a brief summary. Example: write a CSV then print("Saved net_income_report.csv — 12 rows, total: $45,230").\n- Charts/visualizations → save as PNG/HTML file. Use matplotlib, plotly, etc.\n- ALWAYS print() something so the user sees immediate feedback, even when saving files.\n- NEVER hardcode or inline data in the script. If saved files exist (check with list_files first), read them with Python (e.g. pandas.read_csv, open()) using just the filename.\n- Keep scripts concise. Use pandas for CSV processing when appropriate.',
+    description: 'Execute a Python script in the source project directory. Requires user approval. Requires "code" (Python source). The script runs in the current source project directory (same as source_read/source_write).\n\nOutput rules:\n- Quick answers (single number, short list, yes/no) → print() to console.\n- Reports, tables, formatted results → print() a summary.\n- ALWAYS print() something so the user sees immediate feedback.\n- Keep scripts concise. Use pandas for CSV processing when appropriate.',
     parameters: { code: 'string' },
     execute: async ({ code }, context) => {
       const t0 = Date.now();
@@ -1304,27 +1304,18 @@ const tools = {
 
       code = fixPythonBooleans(code);
 
-      await mkdir(DATA_DIR, { recursive: true });
-      const tmpFile = join(DATA_DIR, '.tmp_script.py');
+      const projectDir = resolve(config.sourceDir || process.env.HOME);
+      const tmpFile = join(projectDir, '.tmp_script.py');
       await writeFile(tmpFile, code, 'utf-8');
 
-      // Snapshot files before execution to detect new/changed files
-      const before = new Map();
-      for (const name of await readdir(DATA_DIR)) {
-        if (name.startsWith('.tmp_script')) continue;
-        const s = await stat(join(DATA_DIR, name)).catch(() => null);
-        if (s?.isFile()) before.set(name, s.mtimeMs);
-      }
-      console.log(`[run_python] file snapshot: ${before.size} existing files (${elapsed()})`);
-
       const pythonBin = PYTHON_VENV ? join(PYTHON_VENV, 'bin', 'python') : 'python3';
-      console.log(`[run_python] spawning: ${pythonBin} ${tmpFile} (timeout=120s) (${elapsed()})`);
+      console.log(`[run_python] spawning: ${pythonBin} ${tmpFile} cwd=${projectDir} (timeout=120s) (${elapsed()})`);
       const TIMEOUT_MS = 120000;
       const { exitCode, stdout, stderr, timedOut } = await new Promise((resolve) => {
         let out = '', err = '', resolved = false;
         const finish = (result) => { if (!resolved) { resolved = true; resolve(result); } };
         const proc = spawn(pythonBin, [tmpFile], {
-          cwd: DATA_DIR,
+          cwd: projectDir,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         const killTimer = setTimeout(() => {
@@ -1340,34 +1331,16 @@ const tools = {
       console.log(`[run_python] process exited: code=${exitCode} timedOut=${timedOut} stdout=${stdout.length}B stderr=${stderr.length}B (${elapsed()})`);
       await unlink(tmpFile).catch(() => {});
 
-      // Detect new or modified files
-      const outputFiles = [];
-      for (const name of await readdir(DATA_DIR)) {
-        if (name.startsWith('.tmp_script')) continue;
-        const s = await stat(join(DATA_DIR, name)).catch(() => null);
-        if (!s?.isFile()) continue;
-        const prevMtime = before.get(name);
-        if (prevMtime === undefined || s.mtimeMs > prevMtime) {
-          outputFiles.push({
-            name,
-            size: s.size,
-            url: `/files/${encodeURIComponent(name)}`,
-          });
-        }
-      }
-      console.log(`[run_python] detected ${outputFiles.length} new/modified files (${elapsed()})`);
-
       const result = { exitCode, stdout: tagLineCount(stdout, 8000) };
       if (timedOut) result.timedOut = true;
       if (stderr) result.stderr = stderr.slice(0, 4000);
-      if (outputFiles.length) result.files = outputFiles;
       console.log(`[run_python] done (${elapsed()})`);
       return result;
     },
   },
   etrade_account: {
-    description: 'Retrieve E*TRADE brokerage and market data. Requires an "action" argument.\n\n**Account actions** (require "accountIdKey" — can be the encoded key from "list", a numeric accountId, OR a description like "IRA", "Rollover IRA", "brokerage" — auto-resolved):\n- "list": list accounts\n- "balance": account balance\n- "portfolio": positions/holdings\n- "transactions": transaction history (auto-paginates to fetch ALL matching transactions within the date range; **defaults to Jan 1 of current year** if no startDate given; use startDate/endDate in MMDDYYYY to query other periods; ALWAYS pass startDate explicitly when the user specifies a date range — never ask the user to confirm, just do it; maxPages to limit pagination — 0=unlimited which is the default)\n- "gains": unrealized gains with lot-level cost basis and short/long term\n- "orders": order history (optional status: OPEN/EXECUTED/CANCELLED/etc, fromDate/toDate in MMDDYYYY, count max 100)\n- "transaction_detail": single transaction detail (requires transactionId)\n\n**Market data actions** (no accountIdKey needed):\n- "quote": real-time quotes (requires "symbols" — comma-separated, up to 25; optional detailFlag: ALL/FUNDAMENTAL/INTRADAY/OPTIONS/WEEK_52)\n- "optionchains": option chains with full Greeks (Delta, Gamma, Theta, Vega, Rho, IV) and bid/ask/volume/OI (requires "symbol"; optional expiryYear/expiryMonth/expiryDay, strikePriceNear, noOfStrikes, chainType: CALL/PUT/CALLPUT, includeWeekly)\n- "optionexpiry": option expiration dates (requires "symbol")\n- "lookup": product/symbol lookup (requires "search" — company name or partial symbol)\n\n**User alerts:**\n- "alerts": account/stock alerts (optional count 1-300, category: STOCK/ACCOUNT, status: READ/UNREAD)\n- "alert_detail": single alert detail (requires alertId)\n\nTo export data, add "saveAs" with a filename (.csv/.md/.json). Usage guide: "gains" for open positions with cost basis; "transactions" for trade history; "orders" for order status/fills; "quote" for current prices; "optionchains" for available options with Greeks (Delta, Theta, IV, etc.).',
-    parameters: { action: 'string', accountIdKey: 'string (optional)', startDate: 'string (optional)', endDate: 'string (optional)', count: 'number (optional)', maxPages: 'number (optional, transactions only — 0=unlimited, default 0)', saveAs: 'string (optional)', symbols: 'string (optional)', symbol: 'string (optional)', detailFlag: 'string (optional)', expiryYear: 'string (optional)', expiryMonth: 'string (optional)', expiryDay: 'string (optional)', strikePriceNear: 'string (optional)', noOfStrikes: 'string (optional)', chainType: 'string (optional)', includeWeekly: 'boolean (optional)', search: 'string (optional)', status: 'string (optional)', fromDate: 'string (optional)', toDate: 'string (optional)', category: 'string (optional)', transactionId: 'string (optional)', alertId: 'string (optional)' },
+    description: 'Retrieve E*TRADE brokerage and market data. Requires an "action" argument.\n\n**Account actions** (require "accountIdKey" — can be the encoded key from "list", a numeric accountId, OR a description like "IRA", "Rollover IRA", "brokerage" — auto-resolved):\n- "list": list accounts\n- "balance": account balance\n- "portfolio": positions/holdings\n- "transactions": transaction history (auto-paginates to fetch ALL matching transactions within the date range; **defaults to Jan 1 of current year** if no startDate given; use startDate/endDate in MMDDYYYY to query other periods; ALWAYS pass startDate explicitly when the user specifies a date range — never ask the user to confirm, just do it; maxPages to limit pagination — 0=unlimited which is the default)\n- "gains": unrealized gains with lot-level cost basis and short/long term\n- "orders": order history (optional status: OPEN/EXECUTED/CANCELLED/etc, fromDate/toDate in MMDDYYYY, count max 100)\n- "transaction_detail": single transaction detail (requires transactionId)\n\n**Market data actions** (no accountIdKey needed):\n- "quote": real-time quotes (requires "symbols" — comma-separated, up to 25; optional detailFlag: ALL/FUNDAMENTAL/INTRADAY/OPTIONS/WEEK_52)\n- "optionchains": option chains with full Greeks (Delta, Gamma, Theta, Vega, Rho, IV) and bid/ask/volume/OI (requires "symbol"; optional expiryYear/expiryMonth/expiryDay, strikePriceNear, noOfStrikes, chainType: CALL/PUT/CALLPUT, includeWeekly)\n- "optionexpiry": option expiration dates (requires "symbol")\n- "lookup": product/symbol lookup (requires "search" — company name or partial symbol)\n\n**User alerts:**\n- "alerts": account/stock alerts (optional count 1-300, category: STOCK/ACCOUNT, status: READ/UNREAD)\n- "alert_detail": single alert detail (requires alertId)\n\nTo export data for Python analysis, add "saveAs" with a filename (.csv/.md/.json) — saves to the source project directory. Usage guide: "gains" for open positions with cost basis; "transactions" for trade history; "orders" for order status/fills; "quote" for current prices; "optionchains" for available options with Greeks (Delta, Theta, IV, etc.).',
+    parameters: { action: 'string', accountIdKey: 'string (optional)', startDate: 'string (optional)', endDate: 'string (optional)', count: 'number (optional)', maxPages: 'number (optional, transactions only — 0=unlimited, default 0)', saveAs: 'string (optional, filename to save in project dir)', symbols: 'string (optional)', symbol: 'string (optional)', detailFlag: 'string (optional)', expiryYear: 'string (optional)', expiryMonth: 'string (optional)', expiryDay: 'string (optional)', strikePriceNear: 'string (optional)', noOfStrikes: 'string (optional)', chainType: 'string (optional)', includeWeekly: 'boolean (optional)', search: 'string (optional)', status: 'string (optional)', fromDate: 'string (optional)', toDate: 'string (optional)', category: 'string (optional)', transactionId: 'string (optional)', alertId: 'string (optional)' },
     execute: async ({ action, accountIdKey, startDate, endDate, count, maxPages, saveAs, symbols, symbol, detailFlag, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly, search, status, fromDate, toDate, category, transactionId, alertId }) => {
       const _logArgs = { action, accountIdKey, startDate, endDate, count, maxPages, saveAs, symbols, symbol, detailFlag, expiryYear, expiryMonth, expiryDay, strikePriceNear, noOfStrikes, chainType, includeWeekly, search, status, fromDate, toDate, category, transactionId, alertId };
       // Strip undefined args for cleaner logs
@@ -1496,8 +1469,8 @@ const tools = {
           default: return {};
         }
       }
-      // Save to file if requested
-      if (saveAs && result && !result.error) {
+      // Save to project directory if requested
+      if (saveAs && result && !result.error && config.sourceDir) {
         let content;
         if (saveAs.endsWith('.json')) {
           content = JSON.stringify(result, null, 2);
@@ -1506,45 +1479,52 @@ const tools = {
         } else {
           content = formatters[action]?.(result) || JSON.stringify(result, null, 2);
         }
-        if (!content) return { ...result, saveError: 'No data to save' };
-        const file = await saveToFile(saveAs, content);
-        const out = { ...summarize(action, result), savedFile: file };
-        await _log(result, out);
-        return out;
-      }
-      // For large result sets, auto-save to CSV and return summary + truncated preview
-      const ROW_THRESHOLD = 30;
-      const optionPairCount = result.OptionPair?.length || 0;
-      const rowCount = result.Transaction?.length || result.AccountPortfolio?.[0]?.Position?.length || result.gains?.length || result.Order?.length || (optionPairCount * 2) || result.quotes?.length || result.Alert?.length || 0;
-      if (rowCount > ROW_THRESHOLD && formatters[action]) {
-        const autoFile = `${action}_${Date.now()}.csv`;
-        const csvContent = formatters[action](result);
-        if (csvContent) {
-          const file = await saveToFile(autoFile, csvContent);
-          const mdFormatter = mdFormatters[action];
-          // Build a truncated copy for the preview (first 15 items)
-          const truncated = { ...result };
-          if (truncated.Transaction) truncated.Transaction = truncated.Transaction.slice(0, 15);
-          if (truncated.Order) truncated.Order = truncated.Order.slice(0, 15);
-          if (truncated.gains) truncated.gains = truncated.gains.slice(0, 15);
-          if (truncated.AccountPortfolio?.[0]?.Position) {
-            truncated.AccountPortfolio = [{ ...truncated.AccountPortfolio[0], Position: truncated.AccountPortfolio[0].Position.slice(0, 15) }];
-          }
-          if (truncated.OptionPair) truncated.OptionPair = truncated.OptionPair.slice(0, 8);
-          if (truncated.quotes) truncated.quotes = truncated.quotes.slice(0, 15);
-          if (truncated.Alert) truncated.Alert = truncated.Alert.slice(0, 15);
-          const preview = mdFormatter ? mdFormatter(truncated) : null;
-          const out = {
-            ...summarize(action, result),
-            savedFile: file,
-            _autoSaved: true,
-            _note: `${rowCount} rows — auto-saved full data to ${autoFile}. Preview shows first 15 rows. In run_python use: pd.read_csv('${autoFile}') — just the filename, NOT /files/ path.`,
-            ...(preview ? { _markdown: preview } : {}),
-          };
+        if (content) {
+          const safe = basename(saveAs).replace(/[^a-zA-Z0-9._-]/g, '_');
+          const full = join(resolve(config.sourceDir), safe);
+          await writeFile(full, content, 'utf-8');
+          const out = { ...summarize(action, result), savedFile: { filename: safe, size: Buffer.byteLength(content, 'utf-8') } };
           await _log(result, out);
           return out;
         }
       }
+
+      // Auto-save large results to project directory
+      if (config.sourceDir) {
+        const ROW_THRESHOLD = 30;
+        const optionPairCount = result.OptionPair?.length || 0;
+        const rowCount = result.Transaction?.length || result.AccountPortfolio?.[0]?.Position?.length || result.gains?.length || result.Order?.length || (optionPairCount * 2) || result.quotes?.length || result.Alert?.length || 0;
+        if (rowCount > ROW_THRESHOLD && formatters[action]) {
+          const autoFile = `${action}_${Date.now()}.csv`;
+          const csvContent = formatters[action](result);
+          if (csvContent) {
+            const full = join(resolve(config.sourceDir), autoFile);
+            await writeFile(full, csvContent, 'utf-8');
+            const mdFmt = mdFormatters[action];
+            const truncated = { ...result };
+            if (truncated.Transaction) truncated.Transaction = truncated.Transaction.slice(0, 15);
+            if (truncated.Order) truncated.Order = truncated.Order.slice(0, 15);
+            if (truncated.gains) truncated.gains = truncated.gains.slice(0, 15);
+            if (truncated.AccountPortfolio?.[0]?.Position) {
+              truncated.AccountPortfolio = [{ ...truncated.AccountPortfolio[0], Position: truncated.AccountPortfolio[0].Position.slice(0, 15) }];
+            }
+            if (truncated.OptionPair) truncated.OptionPair = truncated.OptionPair.slice(0, 8);
+            if (truncated.quotes) truncated.quotes = truncated.quotes.slice(0, 15);
+            if (truncated.Alert) truncated.Alert = truncated.Alert.slice(0, 15);
+            const preview = mdFmt ? mdFmt(truncated) : null;
+            const out = {
+              ...summarize(action, result),
+              savedFile: { filename: autoFile, size: Buffer.byteLength(csvContent, 'utf-8') },
+              _autoSaved: true,
+              _note: `${rowCount} rows — auto-saved to ${autoFile} in project directory. Preview shows first 15 rows. In run_python use: pd.read_csv('${autoFile}')`,
+              ...(preview ? { _markdown: preview } : {}),
+            };
+            await _log(result, out);
+            return out;
+          }
+        }
+      }
+
       // Return pre-formatted markdown table + lightweight summary (no raw data)
       const mdFormatter = mdFormatters[action];
       if (mdFormatter && result && !result.error) {
@@ -2093,18 +2073,11 @@ Tool rules:
 - NEVER question or editorialize about live market data based on your training data. Stock prices change — if E*TRADE shows a stock at $400, that IS the price. Do not say "this seems unusually high" or "typically trades lower" based on stale training knowledge. Your training data prices are outdated; live data is ground truth.
 - OPTIONS REASONING: Apply correct options logic. IV (implied volatility) reflects the market's expected move, NOT moneyness. High IV on an OTM option means the market expects a large move or is pricing event risk — it does NOT mean IV is high "because" the option is far OTM. OTM options with no catalyst typically have LOWER IV. Get the causality right: distance from strike is a reason to question why IV is elevated, never an explanation for it.
 - NEVER substitute training-data knowledge for missing live data. If a tool call didn't return the data you need (e.g. IV, Greeks, a specific field), RETRY the tool with correct parameters or tell the user what's missing. NEVER say "the tool didn't return X, but here's what typically happens" — that's fabrication disguised as education. Either fetch real data or say you couldn't get it.
-- For ANY calculation on financial data (sums, averages, filtering, grouping, date math, comparisons of more than 2-3 values) — ALWAYS save the data to a file first (using saveAs), then use run_python to process it. Never do mental math or manual arithmetic on financial figures.
-- When etrade_account returns a "_markdown" table, DO NOT repeat or echo the table in your response. The user can see the data in the collapsible tool result. Instead, provide insights, answer the question, or highlight key findings. When the result is auto-saved (you see "_autoSaved"), use run_python with the saved CSV file for any analysis. The preview only shows the first 15 rows — the FULL dataset is in the CSV. NEVER claim data is missing or unavailable when it was auto-saved. If the preview doesn't show the rows you need, that means you MUST use run_python to read the CSV — the data IS there.
-- ANALYSIS WORKFLOW: When the user asks to retrieve data AND perform calculations (e.g. "get transactions and calculate net income"), ALWAYS combine both steps into ONE etrade_account call with saveAs, then ONE run_python call. NEVER fetch data without saveAs when analysis is needed — the correct sequence is: (1) etrade_account with saveAs to get real data into a file, (2) run_python to read that file and compute results. This avoids dumping large tables on screen and ensures Python works with real data.
-- Large result sets (30+ rows) are auto-saved to CSV. When you see "_autoSaved" in the result, the full data is already in the saved file — use that filename in your run_python script. Do NOT re-fetch the data.
-
-## File & data workflow
-- To save E*TRADE data to a file — use etrade_account with the "saveAs" parameter (e.g. saveAs: "CURRENT_TRANSACTIONS.csv"). This is the ONLY correct way. NEVER use run_python or save_file to save E*TRADE data — the data would be fabricated. Only etrade_account has real data.
-- To see what data files are available — use list_files.
-- To read file contents (CSVs, text files, downloaded data) — use file_read. Use head parameter for large files.
-- To run Python scripts for data analysis, calculations, or CSV processing — use run_python. Scripts run in the same directory as saved files and can read/write them directly by filename. ONLY use run_python to process data that already exists in files — never to fetch or fabricate data.
-- run_python output strategy: For quick calculations, just print(). For reports, tables, or analysis results — ALWAYS save to a file (CSV for data, MD for formatted reports, HTML for rich reports, PNG for charts) AND print a short summary. The tool auto-detects created files and returns download URLs. Never dump large tables to stdout — save them to a file instead.
-- run_python data workflow: When the user asks for a CALCULATION, write the calculation script DIRECTLY — do NOT waste rounds on diagnostic scripts (list_files, file_read, print columns) unless the calculation script fails. You already know the column names from the tool results and CSV format. Transaction CSV columns: Date, Transaction ID, Type, Symbol, Security Type, Call/Put, Strike, Expiry, Quantity, Price, Amount, Fee, Description. Portfolio CSV columns: Symbol, Description, Security Type, Call/Put, Strike, Expiry, Quantity, Price Paid, Market Value, Total Cost, Total Gain, Total Gain Pct. If etrade_account auto-saved a file (you see "_autoSaved" and "savedFile"), use that filename directly. Only run a diagnostic script (print columns, head) AFTER a calculation script fails — never as a first step. NEVER do mental arithmetic on financial data — if the user asked for a calculation, you MUST produce the answer from a Python script, not from eyeballing data.
+- For ANY calculation on financial data (sums, averages, filtering, grouping, date math, comparisons of more than 2-3 values) — use run_python to process it. Never do mental math or manual arithmetic on financial figures.
+- When etrade_account returns a "_markdown" table, DO NOT repeat or echo the table in your response. The user can see the data in the collapsible tool result. Instead, provide insights, answer the question, or highlight key findings.
+- To save E*TRADE data for Python analysis — use etrade_account with "saveAs" parameter (e.g. saveAs: "transactions.csv"). Files are saved to the source project directory. NEVER use run_python to fabricate E*TRADE data — only etrade_account has real data.
+- Large result sets (30+ rows) are auto-saved to CSV in the project directory. When you see "_autoSaved", use that filename directly in run_python.
+- run_python runs in the source project directory — same location as saved files. Use filenames directly (e.g. pd.read_csv('transactions.csv')).
 - run_python code quality — MANDATORY rules:
   1. FORBIDDEN: iterrows(), itertuples(), for-loops over DataFrame rows, iloc[0] inside loops. Use ONLY vectorized pandas: groupby().agg(), merge(), df[condition]['col'].sum(). Any script using iterrows WILL FAIL.
   2. Keep scripts under 40 lines. One task per script.
@@ -2149,11 +2122,11 @@ Tool rules:
 - After web_search, ALWAYS use web_fetch on the most relevant result URL to get full details before answering. Search snippets alone are not sufficient.
 - For ANY question about stock quotes, option chains, option Greeks, option expiration dates, or symbol lookup — ALWAYS use etrade_account (actions: quote, optionchains, optionexpiry, lookup) instead of web_search. These return real-time market data directly from E*TRADE. Only fall back to web_search if E*TRADE is not authenticated.
 - EXISTING POSITIONS IV/Greeks: When the user asks about IV, Greeks, or details on options they ALREADY HOLD (e.g. "check my MU option's IV", "what's the delta on my calls"), do NOT fetch the full option chain or expiry list. Instead: (1) call "portfolio" with accountIdKey matching the account description (e.g. "IRA", "brokerage" — auto-resolved, no need to call "list" first) to see their exact positions (symbol, strike, expiry), (2) call "optionchains" with the EXACT expiryYear/expiryMonth/expiryDay and strikePriceNear matching the held position's strike, with noOfStrikes=3 to get a narrow slice. This returns IV and Greeks in just 2 rounds. NEVER call optionexpiry when the user already has positions — the expiry is in the portfolio data. NEVER call "list" just to look up an accountIdKey — pass the account description directly.
-- General options analysis workflow (IV surface, term structure, "show all options"): (1) get current price with "quote" + available expirations with "optionexpiry" in parallel (ONE round), (2) immediately fetch "optionchains" — do NOT re-fetch quote or expiry dates you already have. For multi-expiry analysis, fetch up to 3 chains in parallel in ONE round, each with saveAs (e.g. saveAs: "MU_chain_apr17.csv"). Use strikePriceNear + noOfStrikes to limit each chain to ~20 strikes near ATM — do NOT fetch full chains for multi-expiry analysis as the combined data will be too large. You have limited tool rounds — NEVER waste rounds repeating calls you already made. (3) In the NEXT round (not the same round!), use run_python on the saved CSVs. NEVER mix optionchains + run_python in the same round — run_python executes in parallel and the files won't exist yet. NEVER guess prices, expiration dates, or Greeks — always fetch real data first.
+- General options analysis workflow (IV surface, term structure, "show all options"): (1) get current price with "quote" + available expirations with "optionexpiry" in parallel (ONE round), (2) immediately fetch "optionchains" — do NOT re-fetch quote or expiry dates you already have. For multi-expiry analysis, fetch up to 3 chains in parallel in ONE round. Use strikePriceNear + noOfStrikes to limit each chain to ~20 strikes near ATM — do NOT fetch full chains for multi-expiry analysis as the combined data will be too large. You have limited tool rounds — NEVER waste rounds repeating calls you already made. NEVER guess prices, expiration dates, or Greeks — always fetch real data first.
 - CRITICAL: Only present strike prices, premiums, and Greeks that appear EXACTLY in the tool results. NEVER interpolate, extrapolate, or invent strikes between the ones returned. If the chain shows strikes at 420 and 430, do NOT fabricate a 425 strike. Present only real data rows from the tool output.
 - OPTION CHAIN DISPLAY: When presenting option chain data, display ALL returned strikes in the table — do NOT cherry-pick or truncate. The user needs the complete picture to make trading decisions.
-- OPTION CHAIN FETCHING: When the user asks for a specific delta range, covered calls, or any filtered view of options — fetch the FULL chain for that expiry (omit noOfStrikes, omit strikePriceNear), save to CSV with saveAs, then use run_python to filter by delta/strike/etc. ONE fetch + ONE filter = done. Do NOT crawl through multiple strikePriceNear values — that wastes rounds. For simple "show me the chain" requests, use strikePriceNear (current price) + noOfStrikes=25 to get ~25 strikes around ATM.
-- RANKING/FILTERING option chains: When the user asks for "most popular", "highest volume", "top N by OI", or any ranking/filtering of options — you MUST fetch the FULL chain (do NOT use noOfStrikes to limit). The full chain will auto-save to CSV. Then use run_python to sort/filter the CSV and find the answer. You cannot determine "most popular" from a subset — you need all strikes to compare. Example: fetch full chain with saveAs → run_python to sort by Open Interest or Volume → present top N results.
+- OPTION CHAIN FETCHING: When the user asks for a specific delta range, covered calls, or any filtered view of options — fetch the FULL chain for that expiry (omit noOfStrikes, omit strikePriceNear). Do NOT crawl through multiple strikePriceNear values — that wastes rounds. For simple "show me the chain" requests, use strikePriceNear (current price) + noOfStrikes=25 to get ~25 strikes around ATM.
+- RANKING/FILTERING option chains: When the user asks for "most popular", "highest volume", "top N by OI", or any ranking/filtering of options — you MUST fetch the FULL chain (do NOT use noOfStrikes to limit). You cannot determine "most popular" from a subset — you need all strikes to compare.
 - When analyzing options positions from etrade_account, ALWAYS use the current date/time (provided above) to calculate days-to-expiry. Never estimate or guess expiration dates — compute them from the portfolio data. Verify your time-to-expiry math before reporting. Common covered call strategies use ~30-day income-generating calls, not imminent expirations — frame your analysis accordingly.
 
 ## Hotel & Travel Tools
@@ -2196,7 +2169,7 @@ Rules:
 ${applets ? `## Applet Visualizations
 
 IMPORTANT: Applets are NOT tools. Do NOT wrap applets in <tool_call> tags. Applets go directly in your response text.
-NEVER use save_file to create HTML files for visualization. NEVER generate external HTML files. ALL visualizations MUST be inline <applet> blocks in your response — they render as interactive iframes directly in the chat.
+ALL visualizations MUST be inline <applet> blocks in your response — they render as interactive iframes directly in the chat.
 
 TEMPLATES: When the user's message contains a saved HTML template (in a code block preceded by "Use this saved HTML applet template"), you MUST use that template as-is. Output it as an <applet> block. Only modify data file references (filenames in fetch calls, embedded arrays) and configuration values the user asked to change. Do NOT change the layout, CSS, column structure, or visual design. The template is the user's preferred design — respect it exactly.
 
@@ -2205,20 +2178,7 @@ When the user requests a visualization, chart, diagram, dashboard, or interactiv
 - TYPE must be one of: svg, chartjs, html
 - All CSS inline in <style>, all JS inline in <script>
 - For displaying local images: use the file proxy \`/api/file?path=ABSOLUTE_PATH\` as img src. Use type="html" (NOT type="svg"). Once you have the file path from a tool result, emit the applet immediately — do not re-verify. Example: \`<img src="/api/file?path=/home/user/photo.png">\`
-- For small datasets: embed data in a const at the top of <script>
-- For large datasets or files saved with save_file: use fetch('/files/FILENAME') to load data at runtime — applets can access server files. ALWAYS use the absolute path '/files/FILENAME' — never a bare filename without the /files/ prefix, because applets run in an iframe where relative URLs do not resolve
-- CRITICAL: Applets CANNOT discover files dynamically — there is no directory listing API. Before generating an applet that loads files, you MUST use list_files (or save_file) to know the exact filenames, then embed them as a JavaScript array/object in the applet code. Example: const FILES = ["amd_calls_2026-04-17.csv", "amd_puts_2026-04-17.csv"]; Dropdowns and selectors must be populated from this embedded list
-- CSV LOADING: When fetching CSV files, use file_read first to check the actual column headers and note them exactly. Then in the applet use this pattern:
-  async function loadCSV(url) {
-    if (!url.startsWith('/')) url = '/files/' + url;
-    const res = await fetch(url);
-    const text = await res.text();
-    const rows = text.trim().split('\\n');
-    const headers = rows[0].split(',').map(h => h.trim());
-    console.log('CSV headers:', headers, 'rows:', rows.length - 1);
-    return rows.slice(1).map(r => { const v = r.split(','); return Object.fromEntries(headers.map((h,i) => [h, v[i]?.trim() || ''])); });
-  }
-  Use EXACT header names from file_read output (e.g., "Open Interest" not "openInterest"). Wrap all fetch+render in try/catch and display errors visibly in the applet DOM: catch(e) { document.body.innerHTML = '<pre style="color:red">' + e.message + '</pre>'; }
+- For datasets: embed data in a const at the top of <script>
 - Dark theme: background #1a1a2e, text #e0e0e0, accent #4a9eff, secondary #7c3aed, success #10b981, warning #f59e0b, error #ef4444, surface #16213e, border #2a2a4a
 - Responsive: use percentage widths, min/max constraints
 - TABLES: Always wrap tables in a div with overflow-x:auto so wide tables (many columns) scroll horizontally. Use white-space:nowrap on table cells to prevent column squishing. Example: <div style="overflow-x:auto"><table>...</table></div>
@@ -2347,11 +2307,10 @@ function repairToolCallJson(raw) {
 
   // Attempt 2: manually extract string arguments for tools with large content
   // Unescape JSON sequences so values have real newlines (not literal \n)
-  // Supports single-arg tools (run_python, run_command) and multi-arg (save_file)
+  // Supports single-arg tools (run_python, run_command) and multi-arg (source_write)
   const toolArgMap = {
     run_python: { primary: 'code' },
     run_command: { primary: 'command' },
-    save_file: { primary: 'content', extra: ['filename'] },
     source_write: { primary: 'content', extra: ['path'] },
     source_edit: { primary: 'new_string', extra: ['path', 'old_string'] },
   };
