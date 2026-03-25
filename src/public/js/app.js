@@ -12,6 +12,7 @@ const state = {
   sessionType: null, // current session color: 'blue'|'cyan'|'amber'|'coral'|'sgreen'|'navy'|'lavender'
   sessionColors: JSON.parse(localStorage.getItem('sessionColors') || '{}'), // convId → sessionType
   location: '', // from server config (LOCATION env var)
+  compactColors: new Set(), // colors that have compact prompts configured
 };
 
 // Colorize diff text — lines starting with +/-/@@ get green/red/cyan
@@ -116,6 +117,10 @@ const saveSessionBtn = document.getElementById('save-session-btn');
 const sessionList = document.getElementById('session-list');
 const sessionsToggle = document.getElementById('sessions-toggle');
 const sessionsDropdown = document.getElementById('sessions-dropdown');
+const saveCompactBtn = document.getElementById('save-compact-btn');
+const compactList = document.getElementById('compact-list');
+const compactsToggle = document.getElementById('compacts-toggle');
+const compactsDropdown = document.getElementById('compacts-dropdown');
 const clearPromptBtn = document.getElementById('clear-prompt-btn');
 const promptList = document.getElementById('prompt-list');
 const promptsToggle = document.getElementById('prompts-toggle');
@@ -187,7 +192,12 @@ const api = {
     return res.json();
   },
   async compactConversation(id) {
-    const res = await fetch(`/api/conversations/${id}/compact`, { method: 'POST' });
+    const color = state.sessionColors[id] || null;
+    const res = await fetch(`/api/conversations/${id}/compact`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color }),
+    });
     return res.json();
   },
 };
@@ -266,9 +276,10 @@ function renderSidebar() {
       }
     });
 
-    // Compact button — only for pinned conversations with messages
+    // Compact button — only for pinned conversations with messages AND a compact prompt for this color
     let compactBtn = null;
-    if (conv.pinned && (conv.messageCount || 0) > 2) {
+    const convColor = state.sessionColors[conv.id];
+    if (conv.pinned && (conv.messageCount || 0) > 2 && convColor && state.compactColors.has(convColor)) {
       compactBtn = document.createElement('button');
       compactBtn.className = 'text-zinc-600 hover:text-cyan-400 px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer';
       compactBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/></svg>';
@@ -587,23 +598,6 @@ function extractImageUrls(obj, depth = 0) {
   return [...urls];
 }
 
-// ── File download link helper ─────────────────────────
-function makeFileDownloadLink(toolName, resultStr) {
-  try {
-    const parsed = JSON.parse(resultStr);
-    // Direct save_file result or nested savedFile from other tools (e.g. etrade_account)
-    const fileInfo = toolName === 'save_file' ? parsed : parsed.savedFile;
-    if (!fileInfo?.url || !fileInfo?.filename) return null;
-    const sizeStr = fileInfo.size >= 1024 ? `${(fileInfo.size / 1024).toFixed(1)} KB` : `${fileInfo.size} bytes`;
-    const link = document.createElement('a');
-    link.href = fileInfo.url;
-    link.download = fileInfo.filename;
-    link.className = 'inline-flex items-center gap-1 mt-1 px-2 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded transition-colors';
-    link.innerHTML = `<span>📥</span> Download <strong>${fileInfo.filename}</strong> <span class="text-zinc-400">(${sizeStr})</span>`;
-    return link;
-  } catch { return null; }
-}
-
 // ── Messages ──────────────────────────────────────────
 function renderMessages(messages) {
   responseArea.innerHTML = '';
@@ -728,8 +722,6 @@ function appendMessage(role, text, images, meta = {}) {
           container.appendChild(imgDetail);
         }
       } catch {}
-      const dl = makeFileDownloadLink(tu.name, tu.result);
-      if (dl) container.appendChild(dl);
     }
     bubble.appendChild(container);
   }
@@ -749,11 +741,10 @@ function appendMessage(role, text, images, meta = {}) {
 }
 
 // ── Streaming ─────────────────────────────────────────
-async function sendMessage(content, images, { hideUserMessage = false } = {}) {
+async function sendMessage(content, images, { sessionInit = false } = {}) {
   if (!state.currentConversationId) return;
 
-  state._hiddenMessage = hideUserMessage;
-  if (!hideUserMessage) appendMessage('user', content, images);
+  appendMessage('user', content, images);
   const bubble = appendMessage('assistant', '');
   sendBtn.disabled = true;
   startElapsedTimer();
@@ -795,12 +786,12 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
         images: images ? images.map(i => ({ mimeType: i.mimeType, base64: i.base64 })) : undefined,
         applets: state.appletsEnabled,
         autorun: state.autorunEnabled,
-        hidden: state._hiddenMessage || false,
+        sessionInit: sessionInit || false,
       }),
       signal: state.abortController.signal,
     });
 
-    state._hiddenMessage = false;
+    // sessionInit flag consumed by POST body above
     // Refresh slots shortly after backend assigns slot
     setTimeout(refreshSlots, 500);
 
@@ -921,8 +912,6 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
                 if (parsedResult.totalCount != null) counts.push(`${parsedResult.totalCount} items`);
                 else if (parsedResult.totalPositions != null) counts.push(`${parsedResult.totalPositions} positions`);
                 else if (parsedResult.totalPairs != null) counts.push(`${parsedResult.totalPairs} pairs`);
-                if (parsedResult._autoSaved) counts.push('auto-saved');
-                if (parsedResult.savedFile) counts.push(parsedResult.savedFile.filename);
                 // Source tool metadata
                 if (parsedResult.path && parsedResult._diff) {
                   counts.push(parsedResult.path);
@@ -995,8 +984,6 @@ async function sendMessage(content, images, { hideUserMessage = false } = {}) {
 
               toolUseContainer.appendChild(detail);
 
-              const dl = makeFileDownloadLink(data.tool_use.name, data.tool_use.result);
-              if (dl) toolUseContainer.appendChild(dl);
               responseArea.scrollTop = responseArea.scrollHeight;
             } // end else (thinkEnabled)
             } // end if (data.tool_use)
@@ -1552,7 +1539,7 @@ newChatButtons.forEach(btn => {
           modal._restoreThink = wasThinkEnabled;
         } else {
           const text = expandPromptMacros(match.text);
-          await sendMessage(text, null, { hideUserMessage: true });
+          await sendMessage(text, null, { sessionInit: true });
           state.thinkEnabled = wasThinkEnabled;
           thinkToggle.checked = wasThinkEnabled;
           return;
@@ -1702,6 +1689,7 @@ promptsToggle.addEventListener('click', (e) => {
   toolsDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
   sessionsDropdown.classList.add('hidden');
+  compactsDropdown.classList.add('hidden');
   promptsDropdown.classList.toggle('hidden');
 });
 promptsDropdown.addEventListener('click', (e) => e.stopPropagation());
@@ -1713,6 +1701,7 @@ templatesToggle.addEventListener('click', (e) => {
   promptsDropdown.classList.add('hidden');
   toolsDropdown.classList.add('hidden');
   sessionsDropdown.classList.add('hidden');
+  compactsDropdown.classList.add('hidden');
   templatesDropdown.classList.toggle('hidden');
   if (!templatesDropdown.classList.contains('hidden')) refreshTemplates();
 });
@@ -1724,10 +1713,128 @@ sessionsToggle.addEventListener('click', (e) => {
   promptsDropdown.classList.add('hidden');
   toolsDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
+  compactsDropdown.classList.add('hidden');
   sessionsDropdown.classList.toggle('hidden');
   if (!sessionsDropdown.classList.contains('hidden')) refreshSessions();
 });
 sessionsDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+// ── Compacts dropdown ──────────────────────────────────
+compactsToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  promptsDropdown.classList.add('hidden');
+  toolsDropdown.classList.add('hidden');
+  sessionsDropdown.classList.add('hidden');
+  templatesDropdown.classList.add('hidden');
+  compactsDropdown.classList.toggle('hidden');
+  if (!compactsDropdown.classList.contains('hidden')) refreshCompacts();
+});
+compactsDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+function renderCompacts(compacts) {
+  compactList.innerHTML = '';
+  if (!compacts.length) {
+    compactList.innerHTML = '<div class="px-3 py-2 text-xs text-zinc-500">No compact prompts saved yet</div>';
+    return;
+  }
+  let dragSrcEl = null;
+
+  for (const c of compacts) {
+    const item = document.createElement('div');
+    item.className = 'group flex items-center gap-1 px-3 py-2 cursor-pointer border-b border-zinc-800/50 hover:bg-zinc-900 transition-colors';
+    item.dataset.id = c.id;
+
+    const grip = document.createElement('span');
+    grip.className = 'cursor-grab text-zinc-600 hover:text-zinc-400 text-xs select-none shrink-0';
+    grip.textContent = '⠿';
+    grip.addEventListener('mousedown', () => { item.draggable = true; });
+    grip.addEventListener('mouseup', () => { item.draggable = false; });
+
+    item.addEventListener('dragstart', (e) => {
+      dragSrcEl = item;
+      item.style.opacity = '0.4';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    item.addEventListener('dragend', () => {
+      item.style.opacity = '1';
+      item.draggable = false;
+      dragSrcEl = null;
+      compactList.querySelectorAll('[data-id]').forEach(el => el.classList.remove('border-t-indigo-500'));
+    });
+    item.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      item.classList.add('border-t-indigo-500');
+    });
+    item.addEventListener('dragleave', () => {
+      item.classList.remove('border-t-indigo-500');
+    });
+    item.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      item.classList.remove('border-t-indigo-500');
+      if (dragSrcEl === item) return;
+      compactList.insertBefore(dragSrcEl, item);
+      const ids = [...compactList.querySelectorAll('[data-id]')].map(el => el.dataset.id);
+      await fetch('/api/compacts/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+    });
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'flex-1 text-xs';
+    titleSpan.textContent = c.title || c.text.slice(0, 60);
+    const cssVar = getComputedStyle(document.documentElement).getPropertyValue(`--btn-${c.color}`).trim();
+    if (cssVar) titleSpan.style.color = textSafeColor(cssVar);
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'text-zinc-600 hover:text-zinc-300 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    editBtn.textContent = '✎';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startTitleEdit(titleSpan, async (newTitle) => {
+        await fetch(`/api/compacts/${c.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: newTitle }),
+        });
+      });
+    });
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'text-zinc-600 hover:text-red-400 text-xs px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0';
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await fetch(`/api/compacts/${c.id}`, { method: 'DELETE' });
+      refreshCompacts();
+    });
+
+    item.addEventListener('click', () => {
+      compactsDropdown.classList.add('hidden');
+      if (!requireSession()) return;
+      input.value = c.text;
+      input.style.height = 'auto';
+      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      input.focus();
+    });
+
+    item.appendChild(grip);
+    item.appendChild(titleSpan);
+    item.appendChild(editBtn);
+    item.appendChild(delBtn);
+    compactList.appendChild(item);
+  }
+}
+
+async function refreshCompacts() {
+  try {
+    const compacts = await (await fetch('/api/compacts')).json();
+    state.compactColors = new Set(compacts.map(c => c.color));
+    renderCompacts(compacts);
+  } catch {}
+}
 
 function startTitleEdit(titleSpan, onSave) {
   const orig = titleSpan.textContent;
@@ -1988,6 +2095,7 @@ document.addEventListener('click', (e) => {
   if (e.target !== toolsToggle) toolsDropdown.classList.add('hidden');
   if (e.target !== templatesToggle) templatesDropdown.classList.add('hidden');
   if (e.target !== sessionsToggle) sessionsDropdown.classList.add('hidden');
+  if (e.target !== compactsToggle) compactsDropdown.classList.add('hidden');
 });
 
 // ── Tools Panel ──────────────────────────────────────
@@ -1995,6 +2103,7 @@ toolsToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   promptsDropdown.classList.add('hidden');
   sessionsDropdown.classList.add('hidden');
+  compactsDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
   toolsDropdown.classList.toggle('hidden');
   if (!toolsDropdown.classList.contains('hidden')) refreshTools();
@@ -2285,8 +2394,8 @@ document.getElementById('prompt-vars-submit').addEventListener('click', () => {
   modal._restoreThink = undefined;
   modal.classList.add('hidden');
   if (restoreThink !== undefined) {
-    // Session init with variables — auto-submit hidden, then restore Think
-    sendMessage(text, null, { hideUserMessage: true }).then(() => {
+    // Session init with variables — auto-submit, then restore Think
+    sendMessage(text, null, { sessionInit: true }).then(() => {
       state.thinkEnabled = restoreThink;
       thinkToggle.checked = restoreThink;
     });
@@ -2471,6 +2580,28 @@ saveSessionBtn.addEventListener('click', async () => {
   }
 });
 
+saveCompactBtn.addEventListener('click', async () => {
+  const text = input.value.trim();
+  if (!text || !state.sessionType) return;
+  const origHTML = saveCompactBtn.innerHTML;
+  saveCompactBtn.disabled = true;
+  saveCompactBtn.style.opacity = '0.5';
+  try {
+    await fetch('/api/compacts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, color: state.sessionType }),
+    });
+    input.value = '';
+    input.style.height = 'auto';
+    refreshCompacts();
+  } finally {
+    saveCompactBtn.disabled = false;
+    saveCompactBtn.style.opacity = '';
+    saveCompactBtn.innerHTML = origHTML;
+  }
+});
+
 // ── Resize divider (chat/prompt) ──────────────────────
 {
   const divider = document.getElementById('resize-divider');
@@ -2577,6 +2708,7 @@ saveSessionBtn.addEventListener('click', async () => {
   updateInputLock();
   refreshPrompts();
   refreshSessions();
+  refreshCompacts();
   pollLLM();
   setInterval(pollLLM, 5000);
   pollInternet();

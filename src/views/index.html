@@ -137,25 +137,31 @@
     </div>
       <div class="ml-auto mr-10 flex items-center gap-6">
         <div class="relative flex items-center">
-          <button id="tools-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Tools</button>
+          <button id="tools-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs" title="Enable/disable LLM tools (search, fetch, code, etc.)">Tools</button>
           <div id="tools-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 w-80 max-h-80 overflow-y-auto slim-scrollbar">
             <div id="tools-list" class="py-1"></div>
           </div>
         </div>
         <div class="relative flex items-center">
-          <button id="prompts-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Prompts</button>
+          <button id="prompts-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs" title="Saved prompts — click to load into input">Prompts</button>
           <div id="prompts-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-[80vh] overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
             <div id="prompt-list" class="py-1"></div>
           </div>
         </div>
         <div class="relative flex items-center">
-          <button id="sessions-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Sessions</button>
+          <button id="sessions-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs" title="Init prompts per session color — auto-sent on new chat">Sessions</button>
           <div id="sessions-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-[80vh] overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
             <div id="session-list" class="py-1"></div>
           </div>
         </div>
         <div class="relative flex items-center">
-          <button id="templates-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs">Templates</button>
+          <button id="compacts-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs" title="Summary prompts per session color — used when compacting conversations">Compacts</button>
+          <div id="compacts-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-[80vh] overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
+            <div id="compact-list" class="py-1"></div>
+          </div>
+        </div>
+        <div class="relative flex items-center">
+          <button id="templates-toggle" class="text-indigo-400 hover:text-indigo-300 transition-colors text-xs" title="Saved applet templates — click to insert [template: name] tag">Templates</button>
           <div id="templates-dropdown" class="hidden absolute top-full right-0 mt-2 bg-zinc-800 border border-zinc-700 rounded-lg shadow-lg z-50 max-h-[80vh] overflow-y-auto slim-scrollbar" style="width:max-content;min-width:12rem;max-width:32rem">
             <div id="template-list" class="py-1"></div>
           </div>
@@ -293,6 +299,14 @@
               class="text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 cursor-pointer"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+            </button>
+            <button
+              type="button"
+              id="save-compact-btn"
+              title="Save as compact prompt"
+              class="text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 cursor-pointer"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h10"/></svg>
             </button>
             <button
               type="button"
