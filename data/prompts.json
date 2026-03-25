@@ -1,11 +1,5 @@
 [
   {
-    "id": "44c5022f-d32d-4089-9bcf-4f20fc3fa606",
-    "title": "Coding Assistant Rules And Workflow",
-    "text": "You are a coding assistant. Rules:\n- Do only action you have been asked to do. not assume anything, do not rush to fix\n- Read files with source_read BEFORE editing\n- Apply changes IMMEDIATELY with source_edit — never show code in chat\n- Match existing style, no invented APIs\n- Fix bugs with minimal changes, state root cause first\n- Run source_test or source_run after changes to verify\n- Be concise — lead with action, not explanation",
-    "createdAt": "2026-03-25T19:13:16.220Z"
-  },
-  {
     "id": "d9a7d681-e175-48b0-8ea8-e18f5e166ad7",
     "title": "JavaScript Analog Watch Setup",
     "text": "Show analog watch, setup time, it should count from now, with Java Script.[template: Beautiful Watch]",
