@@ -169,7 +169,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
     const systemPrompt = getSystemPrompt({ applets });
 
     // Convert stored messages to OpenAI format (handle vision + structured assistant content)
-    const appletRe = /<applet\s+type="([^"]*)"[^>]*>[\s\S]*?<\/applet>/gi;
+    const appletRe = /<applet\s+type=["']([^"']*)["'][^>]*>[\s\S]*?<\/applet>/gi;
     const historyMessages = conv.messages.slice(0, -1).map(msg => {
       if (msg.role === 'user' && typeof msg.content === 'object' && msg.content.images) {
         const parts = [];

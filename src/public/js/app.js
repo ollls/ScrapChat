@@ -132,6 +132,43 @@ const toolsToggle = document.getElementById('tools-toggle');
 const toolsDropdown = document.getElementById('tools-dropdown');
 const toolsList = document.getElementById('tools-list');
 
+// ── Click-to-copy word from assistant messages ───────
+responseArea.addEventListener('click', (e) => {
+  const sel = window.getSelection();
+  if (sel && sel.toString().trim().length > 0) return; // text was selected, don't interfere
+  // Only capture from assistant bubbles (not user bubbles or other elements)
+  const node = e.target.closest && e.target.closest('.justify-start > div');
+  if (!node || !responseArea.contains(node)) return;
+  // Find the text node and offset at click position
+  let textNode, offset;
+  if (document.caretPositionFromPoint) {
+    const pos = document.caretPositionFromPoint(e.clientX, e.clientY);
+    if (!pos || !pos.offsetNode) return;
+    textNode = pos.offsetNode; offset = pos.offset;
+  } else if (document.caretRangeFromPoint) {
+    const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+    if (!range) return;
+    textNode = range.startContainer; offset = range.startOffset;
+  } else return;
+  if (textNode.nodeType !== Node.TEXT_NODE) return;
+  const text = textNode.textContent;
+  // Find word boundaries (non-space chars around click position)
+  let start = offset, end = offset;
+  while (start > 0 && text[start - 1] !== ' ' && text[start - 1] !== '\n') start--;
+  while (end < text.length && text[end] !== ' ' && text[end] !== '\n') end++;
+  const word = text.slice(start, end).trim();
+  if (!word) return;
+  // Insert word at cursor position in textarea (or append with space)
+  const curPos = input.selectionStart || input.value.length;
+  const before = input.value.slice(0, curPos);
+  const after = input.value.slice(curPos);
+  const spaceBefore = before.length && !before.endsWith(' ') && !before.endsWith('\n') ? ' ' : '';
+  input.value = before + spaceBefore + word + after;
+  input.focus();
+  const newPos = curPos + spaceBefore.length + word.length;
+  input.selectionStart = input.selectionEnd = newPos;
+});
+
 // ── API layer ─────────────────────────────────────────
 const api = {
   async listConversations() {
@@ -392,7 +429,7 @@ if (typeof mermaid !== 'undefined') {
 let _mermaidId = 0;
 
 // ── Applet extraction & rendering ─────────────────────
-const APPLET_RE = /<applet\s+type="([^"]*)"[^>]*>([\s\S]*?)<\/applet>/gi;
+const APPLET_RE = /<applet\s+type=["']([^"']*)["'][^>]*>([\s\S]*?)<\/applet>/gi;
 const MAX_APPLET_SIZE = 50 * 1024; // 50KB
 
 function extractApplets(text) {
@@ -436,7 +473,7 @@ function createAppletIframe(applet) {
   }
 
   // Inject style reset to prevent scrollbars inside iframe
-  const iframeReset = '<style>html,body{overflow:hidden;min-height:0!important;margin:0}</style>';
+  const iframeReset = '<style>html,body{min-height:0!important;margin:0;overflow:hidden}img{max-width:100%;height:auto}</style>';
   if (html.includes('<head>')) {
     html = html.replace(/<head>/i, '<head>' + iframeReset);
   } else if (html.includes('<html>')) {
@@ -448,12 +485,11 @@ function createAppletIframe(applet) {
   // Inject auto-resize script if no postMessage present
   if (!html.includes('postMessage')) {
     const resizeScript = `<script>
-new ResizeObserver(() => {
-  window.parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*');
-}).observe(document.body);
-window.addEventListener('load', () => {
-  window.parent.postMessage({ type: 'resize', height: document.body.scrollHeight }, '*');
-});
+function _rsz(){var b=document.body,o=b.style.overflow;b.style.overflow='visible';var h=b.scrollHeight;b.style.overflow=o;window.parent.postMessage({type:'resize',height:h},'*');}
+new ResizeObserver(_rsz).observe(document.body);
+window.addEventListener('load',_rsz);
+document.querySelectorAll('img').forEach(i=>{i.complete?_rsz():i.addEventListener('load',_rsz);});
+new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rsz){i._rsz=1;i.addEventListener('load',_rsz);}});}).observe(document.body,{childList:true,subtree:true});
 <\/script>`;
     html = html.replace(/<\/body>/i, resizeScript + '</body>');
     if (!/<\/body>/i.test(html)) html += resizeScript;
@@ -498,10 +534,12 @@ window.addEventListener('load', () => {
 // Global resize listener for applet iframes (registered once)
 window.addEventListener('message', (e) => {
   if (!e.data || e.data.type !== 'resize' || typeof e.data.height !== 'number') return;
-  const height = Math.max(100, Math.min(2000, e.data.height));
+  const MAX_IFRAME_H = 20000;
+  const height = Math.max(100, Math.min(MAX_IFRAME_H, e.data.height));
   document.querySelectorAll('.applet-iframe').forEach(iframe => {
     if (iframe.contentWindow === e.source) {
       iframe.style.height = height + 'px';
+      iframe.style.overflow = e.data.height > MAX_IFRAME_H ? 'auto' : 'hidden';
     }
   });
 });
