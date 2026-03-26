@@ -1995,6 +1995,7 @@ export function setToolEnabled(name, enabled) {
 const toolGroups = {
   finance: {
     tools: ['etrade_account'],
+    condition: () => etrade.isAuthenticated(),
     routing: [
       '- Stock market, portfolio, options, E*TRADE accounts, trading → use "etrade_account" tool',
     ],
