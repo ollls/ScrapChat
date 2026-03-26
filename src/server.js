@@ -35,6 +35,12 @@ app.use('/api/templates', templateRoutes);
 app.use('/api/sessions', sessionRoutes);
 app.use('/api/compacts', compactRoutes);
 
+// Serve project directory files (follows source_project switches)
+app.use('/files', (req, res, next) => {
+  if (!config.sourceDir) return res.status(404).json({ error: 'No source directory configured' });
+  express.static(resolve(config.sourceDir))(req, res, next);
+});
+
 app.get('/api/config', (_req, res) => {
   res.json({ location: config.location, terminal: !!config.terminal, sourceDir: config.sourceDir || '' });
 });

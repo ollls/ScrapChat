@@ -2,7 +2,7 @@
   {
     "id": "d9a7d681-e175-48b0-8ea8-e18f5e166ad7",
     "title": "JavaScript Analog Watch Setup",
-    "text": "Show analog watch, setup time, it should count from now, with Java Script.[template: Beautiful Watch]",
+    "text": "Show analog watch, setup time, it should count from now, with JavaScript.[template: Beautiful Watch]",
     "createdAt": "2026-03-25T04:25:51.562Z"
   },
   {
@@ -14,7 +14,7 @@
   {
     "id": "9114aca4-d86e-4645-a1ed-f99991e43b21",
     "title": "Covered Call Strategy For Tickler",
-    "text": "I want to sell covered call on {$Tickler}, show me appropriate strikes and delta. low probability less then 0.30. EXPIRY DATE {$CheckIn:date}.",
+    "text": "I want to sell covered call on {$Ticker}, show me appropriate strikes and delta. low probability less than 0.30. EXPIRY DATE {$CheckIn:date}.",
     "createdAt": "2026-03-24T02:01:03.553Z"
   },
   {
@@ -26,13 +26,13 @@
   {
     "id": "0f0acedf-56d5-4d5a-a059-05526682281b",
     "title": "Next Week Put Options by Volume",
-    "text": "Show {$Tickler} PUT options for {$Tickler} shares for next week. Filter out by volume.  Use [template: Next Week Options]",
+    "text": "Show {$Ticker} PUT options for {$Ticker} shares for next week. Filter out by volume. Use [template: Next Week Options]",
     "createdAt": "2026-03-21T16:35:14.581Z"
   },
   {
     "id": "3b4f52f6-4e50-406b-be23-12263d01a513",
     "title": "Next Week Call Options by Volume",
-    "text": "Show {$Tickler} CALL options for {$Tickler} shares for next week. Filter out by volume.  Use [template: Next Week Options]",
+    "text": "Show {$Ticker} CALL options for {$Ticker} shares for next week. Filter out by volume. Use [template: Next Week Options]",
     "createdAt": "2026-03-21T04:41:20.145Z"
   },
   {
@@ -48,15 +48,9 @@
     "createdAt": "2026-03-21T17:46:35.394Z"
   },
   {
-    "id": "36ec5444-5517-4b74-b567-939413f0f80d",
-    "title": "Show Tickler Put Options Next Week",
-    "text": "Show {$Tickler} PUT options for {$Tickler} shares for next week. Filter out by volume.  Use [template: Next Week Options]",
-    "createdAt": "2026-03-21T16:32:31.609Z"
-  },
-  {
     "id": "1e435b0b-ec60-4be5-a75f-eccabfc361de",
     "title": "Stock Option Chain Dashboard Template",
-    "text": "Use HTML applet BIG, CLEAN SIMPLE look and feel.  Generate option chain dashboard for {$Ticker} stock.  Period {$Period:daterange}. Use applet template - [template: Option Chain]",
+    "text": "Use HTML applet BIG, CLEAN, SIMPLE look and feel. Generate option chain dashboard for {$Ticker} stock. Period {$Period:daterange}. Use applet template - [template: Option Chain]",
     "createdAt": "2026-03-21T02:49:37.733Z"
   },
   {

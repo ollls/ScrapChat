@@ -2,7 +2,7 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion } from '../services/llm.js';
-import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation } from '../services/tools.js';
+import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
 import { getCompactByColor } from '../services/compacts.js';
 
@@ -271,6 +271,7 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
     const toolUses = [];
     const toolCallSigCounts = {}; // track repeat counts per unique signature (name+args)
     const toolCallSigs = new Set(); // track unique tool+args signatures for dedup
+    const financeEnabled = isToolGroupEnabled('finance');
     let hadChainData = false;        // whether any optionchains call has completed
     let hadExpiryCall = false;       // whether optionexpiry was called (signals options analysis)
 
@@ -429,39 +430,42 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         llmMessages.push({ role: 'assistant', content: result.content });
         const roundsLeft = MAX_TOOL_ROUNDS - round - 1;
 
-        // Track chain completions
-        for (const tc of toolCallsFound) {
-          if (tc.arguments?.action === 'optionchains') hadChainData = true;
-          if (tc.arguments?.action === 'optionexpiry') hadExpiryCall = true;
-        }
-
-        // Directive: nudge LLM toward next step based on this round's results
+        // Track chain completions and nudge LLM toward next step (finance group only)
         let directive = '';
-        if (hadExpiryCall && !hadChainData) {
-          directive = 'NOW call optionchains (with strikePriceNear) for the expiries you need. Do NOT re-fetch quote or optionexpiry.';
+        if (financeEnabled) {
+          for (const tc of toolCallsFound) {
+            if (tc.arguments?.action === 'optionchains') hadChainData = true;
+            if (tc.arguments?.action === 'optionexpiry') hadExpiryCall = true;
+          }
+          if (hadExpiryCall && !hadChainData) {
+            directive = ' NOW call optionchains (with strikePriceNear) for the expiries you need. Do NOT re-fetch quote or optionexpiry.';
+          }
         }
 
-        const toolReminder = `\n\nRounds left: ${roundsLeft}.${directive ? ' ' + directive : ''} REMINDER: tool calls MUST use <tool_call></tool_call> tags.`;
+        const toolReminder = `\n\nRounds left: ${roundsLeft}.${directive} REMINDER: tool calls MUST use <tool_call></tool_call> tags.`;
         llmMessages.push({ role: 'user', content: resultParts.join('\n\n') + toolReminder });
       } else {
         // Final answer — no tool call found by parser
-        // If LLM fetched optionexpiry (signals options analysis) but never called optionchains, force continuation
-        if (!hadChainData && round < MAX_TOOL_ROUNDS - 1 && hadExpiryCall) {
-          console.warn(`[tool-loop] round ${round + 1}: LLM stopped after prep data without fetching option chains — forcing continuation`);
-          llmMessages.push({ role: 'assistant', content: result.content });
-          llmMessages.push({ role: 'user', content: 'You have NOT completed the task. You fetched quote/expiry data but did not fetch the option chain data needed for analysis. Call optionchains NOW with saveAs, strikePriceNear, and the expiry dates from the optionexpiry results above. Example:\n<tool_call>\n{"name": "etrade_account", "arguments": {"action": "optionchains", "symbol": "MU", "expiryYear": 2026, "expiryMonth": 4, "expiryDay": 17, "strikePriceNear": 406, "saveAs": "MU_chain_apr17.csv"}}\n</tool_call>' });
-          continue;
-        }
-        // Detect fabricated option data: LLM presents Greeks/prices without ever calling optionchains
-        if (!hadChainData && round < MAX_TOOL_ROUNDS - 1) {
-          const greeksRe = /\b(delta|gamma|theta|vega|rho)\b.*?-?\d+\.\d{2,}/i;
-          const optionTableRe = /\b(strike|premium|call|put)\b.*?\$?\d+(\.\d+)?/i;
-          const looksLikeOptionData = greeksRe.test(result.content) || (optionTableRe.test(result.content) && /\b(expir|strike|IV|implied.?vol)/i.test(result.content));
-          if (looksLikeOptionData) {
-            console.warn(`[tool-loop] round ${round + 1}: LLM appears to have fabricated option data without calling optionchains — forcing tool use`);
+        // Finance-specific guards: chain continuation + fabrication detection (only when finance group enabled)
+        if (financeEnabled) {
+          // If LLM fetched optionexpiry (signals options analysis) but never called optionchains, force continuation
+          if (!hadChainData && round < MAX_TOOL_ROUNDS - 1 && hadExpiryCall) {
+            console.warn(`[tool-loop] round ${round + 1}: LLM stopped after prep data without fetching option chains — forcing continuation`);
             llmMessages.push({ role: 'assistant', content: result.content });
-            llmMessages.push({ role: 'user', content: 'STOP. You are presenting option prices, Greeks, or strike data WITHOUT having fetched real data via the etrade_account tool. This data is fabricated. You MUST call etrade_account with action "optionchains" to get real data before presenting any option analysis. First call optionexpiry to get available dates, then optionchains with the expiry you need.' });
+            llmMessages.push({ role: 'user', content: 'You have NOT completed the task. You fetched quote/expiry data but did not fetch the option chain data needed for analysis. Call optionchains NOW with saveAs, strikePriceNear, and the expiry dates from the optionexpiry results above. Example:\n<tool_call>\n{"name": "etrade_account", "arguments": {"action": "optionchains", "symbol": "MU", "expiryYear": 2026, "expiryMonth": 4, "expiryDay": 17, "strikePriceNear": 406, "saveAs": "MU_chain_apr17.csv"}}\n</tool_call>' });
             continue;
+          }
+          // Detect fabricated option data: LLM presents Greeks/prices without ever calling optionchains
+          if (!hadChainData && round < MAX_TOOL_ROUNDS - 1) {
+            const greeksRe = /\b(delta|gamma|theta|vega|rho)\b.*?-?\d+\.\d{2,}/i;
+            const optionTableRe = /\b(strike|premium|call|put)\b.*?\$?\d+(\.\d+)?/i;
+            const looksLikeOptionData = greeksRe.test(result.content) || (optionTableRe.test(result.content) && /\b(expir|strike|IV|implied.?vol)/i.test(result.content));
+            if (looksLikeOptionData) {
+              console.warn(`[tool-loop] round ${round + 1}: LLM appears to have fabricated option data without calling optionchains — forcing tool use`);
+              llmMessages.push({ role: 'assistant', content: result.content });
+              llmMessages.push({ role: 'user', content: 'STOP. You are presenting option prices, Greeks, or strike data WITHOUT having fetched real data via the etrade_account tool. This data is fabricated. You MUST call etrade_account with action "optionchains" to get real data before presenting any option analysis. First call optionexpiry to get available dates, then optionchains with the expiry you need.' });
+              continue;
+            }
           }
         }
         // Detect bare JSON or truncated tool calls and retry the round
