@@ -2196,7 +2196,8 @@ Use this date when answering ANY question involving dates, time, age, deadlines,
 ${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
 
 ## File Access
-Project directory files (CSVs, data files) are served at \`/files/FILENAME\` — use this in applets to fetch saved data (e.g. \`fetch('/files/optionchains_123.csv')\`).
+Project directory files (CSVs, data files) are served at \`/files/FILENAME\` — use this URL in applets to fetch saved data (e.g. \`fetch('/files/optionchains_123.csv')\`).
+IMPORTANT: \`/files/\` is an HTTP URL for reading, NOT a filesystem path. To WRITE files, use the current working directory (e.g. \`open('data.json', 'w')\` in run_python) — they are automatically served at \`/files/data.json\`.
 To display local images from anywhere on the filesystem, use the file proxy: \`/api/file?path=ABSOLUTE_PATH\`
 Example: \`<img src="/api/file?path=/home/ols/Pictures/screenshot.png">\`
 
