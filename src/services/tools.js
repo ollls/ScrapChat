@@ -1303,6 +1303,12 @@ const tools = {
       if (!approved) return { denied: true, message: 'User denied Python execution.' };
 
       code = fixPythonBooleans(code);
+      // Fix double-escaping: LLM sometimes produces a backslash + real newline
+      // inside string literals where it intended \n (e.g. split('\<newline>') → split('\n'))
+      // Pattern: inside quotes, a lone \ at end of line followed by newline → \n
+      code = code.replace(/(["'])([^"']*)\\\n([^"']*)\1/g, (m, q, before, after) => {
+        return `${q}${before}\\n${after}${q}`;
+      });
 
       const projectDir = resolve(config.sourceDir || process.env.HOME);
       const tmpFile = join(projectDir, '.tmp_script.py');
