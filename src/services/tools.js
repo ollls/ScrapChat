@@ -1991,83 +1991,15 @@ export function setToolEnabled(name, enabled) {
   return true;
 }
 
-// Build system prompt from registry
-export function getSystemPrompt({ applets = false } = {}) {
-  const toolList = Object.entries(tools)
-    .filter(([name]) => !disabledTools.has(name))
-    .map(([name, t]) => `- ${name}: ${t.description}`)
-    .join('\n');
-
-  const now = new Date();
-  const datetime = {
-    utc: now.toISOString(),
-    local: now.toString(),
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    offset: now.getTimezoneOffset(),
-  };
-
-  return `You are a helpful, knowledgeable assistant.
-
-## Core Behavior
-Act, don't deliberate. Once you have the information needed to answer or produce output, do it IMMEDIATELY. Do NOT call additional tools to re-verify data you already have. One successful verification is enough — never check the same thing twice. If you have file paths, data, or results from a previous tool call, use them in your response right away.
-
-## Current Date and Time
-Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
-Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
-${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
-${config.sourceDir ? `\n## Self-Awareness\nYou have access to your own source code via source tools. You are "LLM Workbench" — an Express-based chat app.\n\nSource tool workflow:\n1. Use source_project to switch to a different project directory (if needed — always do this BEFORE using other source tools on a non-default project)\n2. Use source_read to browse files (tree/read/grep)\n3. Use source_edit for ALL changes to existing files (targeted string replacement — always prefer this over source_write)\n4. Use source_write ONLY to create new files — never use it to modify existing files\n5. Use source_delete to remove files\n6. Use source_run to execute scripts and commands in the project directory\n7. Use source_test to verify changes work\n8. Use source_git for version control\n\nIMPORTANT: When writing Python code, use correct Python syntax — True, False, None (not JavaScript true, false, null).\n\nCRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_write. Do NOT show code snippets, examples, or previews in chat — apply the change directly with tools. Never describe what you would change — just change it. Read the file first with source_read if needed, then edit it.` : ''}
-
-## File Proxy
-To display local files (images, etc.) in applets or responses, use the file proxy endpoint:
-\`/api/file?path=ABSOLUTE_PATH\`
-Example: \`<img src="/api/file?path=/home/ols/Pictures/screenshot.png">\`
-This serves files directly from the local filesystem. Currently allowed: images (png, jpg, gif, webp, svg, bmp, avif). Use absolute paths only. Do NOT copy files to the saved files directory — use this proxy instead.
-
-## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
-
-CRITICAL: Every tool call MUST be wrapped in <tool_call></tool_call> tags. Bare JSON without these tags will NOT execute — it will be displayed as plain text and the tool will never run.
-
-WRONG (silently ignored — tool never runs):
-{"name": "run_python", "arguments": {"code": "print('hello')"}}
-
-CORRECT (this actually executes):
-<tool_call>
-{"name": "run_python", "arguments": {"code": "print('hello')"}}
-</tool_call>
-
-Multiple tool calls (executed in parallel):
-<tool_call>
-{"name": "etrade_account", "arguments": {"action": "portfolio", "accountIdKey": "abc123"}}
-</tool_call>
-<tool_call>
-{"name": "etrade_account", "arguments": {"action": "quote", "symbols": "AAPL,MSFT"}}
-</tool_call>
-
-CRITICAL JSON rules:
-- All arguments go FLAT in the "arguments" object. NEVER nest "arguments" inside "arguments".
-- Every opening { must have a matching closing }.
-- WRONG: {"name": "etrade_account", "arguments": {"action": "portfolio", "arguments": {"accountIdKey": "x"}}}
-- RIGHT: {"name": "etrade_account", "arguments": {"action": "portfolio", "accountIdKey": "x"}}
-
-Available tools:
-${toolList}
-
-Tool rules:
-- Output ONLY <tool_call> blocks when using tools, no other text before or after.
-- Wait for the tool result before answering.
-- Be proactive: when the user asks for data, CALL the tool immediately with the right parameters. NEVER ask "would you like me to run this?" or "should I re-run with different parameters?" — just do it.
-- EXCEPTION to proactive rule — booking "book" action: ALWAYS stop and confirm with the user BEFORE calling booking book. Show them: hotel name, dates, room type, price, guest name. Wait for explicit "yes" / "book it" / "confirm". This spends real money — never auto-book.
-- REMINDER: tool calls without <tool_call> tags DO NOT EXECUTE.
-
-## Tool Routing — match user intent to the RIGHT tool
-- Hotels, travel, trips, vacations, accommodation, resorts → use "hotel" tool (search, details, rates, reviews)
-- Weather forecasts, destination info, places, airports, cities → use "travel" tool
-- Hotel reservations, booking, cancellation → use "booking" tool
-- Stock market, portfolio, options, E*TRADE accounts, trading → use "etrade_account" tool
-- Web questions, current events, news → use "web_search" then "web_fetch"
-- NEVER use etrade_account for travel/hotel queries. NEVER use hotel/travel for financial queries.
-
-## FINANCIAL DATA INTEGRITY (applies to ALL E*TRADE / financial data)
+// ── Tool Groups: co-located prompt sections per tool group ────────────
+const toolGroups = {
+  finance: {
+    tools: ['etrade_account'],
+    condition: () => etrade.isAuthenticated(),
+    routing: [
+      '- Stock market, portfolio, options, E*TRADE accounts, trading → use "etrade_account" tool',
+    ],
+    prompt: `## FINANCIAL DATA INTEGRITY (applies to ALL E*TRADE / financial data)
 - NEVER interpret, reformat, summarize, round, abbreviate, recalculate, or manually transcribe financial data. E*TRADE tool results are authoritative — present them EXACTLY as returned, or save them to a file and let Python do the analysis. Dropping digits, misplacing decimals, or rounding dollar amounts is a serious error (e.g. $92,891.35 must stay $92,891.35 — never $924.83, $92,891, or $92.9K).
 - NEVER fabricate, interpolate, or invent financial figures. Only present values that appear verbatim in tool results. If a field or row doesn't exist in the data, don't create it.
 - NEVER question or editorialize about live market data based on your training data. Stock prices change — if E*TRADE shows a stock at $400, that IS the price. Do not say "this seems unusually high" or "typically trades lower" based on stale training knowledge. Your training data prices are outdated; live data is ground truth.
@@ -2118,8 +2050,6 @@ Tool rules:
 - CRITICAL FALLBACK: If run_python is unavailable or exhausted, perform arithmetic INLINE using the transaction data already in context. Do NOT cite disabled Python, script truncation, or tool limits as a reason to skip math. Summing premiums and subtracting cover costs is basic addition — it does not require code execution. A response missing dollar amounts is incomplete.
 - run_python error handling: If a script fails, DO NOT retry with the same approach. First run a small diagnostic script (e.g. print columns, print dtypes, print first row) to understand the data, then fix the actual issue. Maximum 1 retry after diagnosis.
 - WHEN TO USE run_python vs direct answer: USE run_python for: any calculation involving more than 3 numbers, aggregations (sum, avg, count, group-by), data with more than 10 rows, date math, filtering/sorting data, or any question where getting the wrong number would be harmful. ANSWER DIRECTLY for: single value lookups, qualitative questions, comparing 2-3 values, or explaining what data means. RULE OF THUMB: if you need to count, sum, or iterate — use Python. Never do mental math on financial data.
-- You are a LOCAL assistant running on the user's machine. You have real shell access via the run_command tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use run_command. NEVER say you cannot run commands or don't have access to the user's system.
-- After web_search, ALWAYS use web_fetch on the most relevant result URL to get full details before answering. Search snippets alone are not sufficient.
 - For ANY question about stock quotes, option chains, option Greeks, option expiration dates, or symbol lookup — ALWAYS use etrade_account (actions: quote, optionchains, optionexpiry, lookup) instead of web_search. These return real-time market data directly from E*TRADE. Only fall back to web_search if E*TRADE is not authenticated.
 - EXISTING POSITIONS IV/Greeks: When the user asks about IV, Greeks, or details on options they ALREADY HOLD (e.g. "check my MU option's IV", "what's the delta on my calls"), do NOT fetch the full option chain or expiry list. Instead: (1) call "portfolio" with accountIdKey matching the account description (e.g. "IRA", "brokerage" — auto-resolved, no need to call "list" first) to see their exact positions (symbol, strike, expiry), (2) call "optionchains" with the EXACT expiryYear/expiryMonth/expiryDay and strikePriceNear matching the held position's strike, with noOfStrikes=3 to get a narrow slice. This returns IV and Greeks in just 2 rounds. NEVER call optionexpiry when the user already has positions — the expiry is in the portfolio data. NEVER call "list" just to look up an accountIdKey — pass the account description directly.
 - General options analysis workflow (IV surface, term structure, "show all options"): (1) get current price with "quote" + available expirations with "optionexpiry" in parallel (ONE round), (2) immediately fetch "optionchains" — do NOT re-fetch quote or expiry dates you already have. For multi-expiry analysis, fetch up to 3 chains in parallel in ONE round. Use strikePriceNear + noOfStrikes to limit each chain to ~20 strikes near ATM — do NOT fetch full chains for multi-expiry analysis as the combined data will be too large. You have limited tool rounds — NEVER waste rounds repeating calls you already made. NEVER guess prices, expiration dates, or Greeks — always fetch real data first.
@@ -2127,9 +2057,16 @@ Tool rules:
 - OPTION CHAIN DISPLAY: When presenting option chain data, display ALL returned strikes in the table — do NOT cherry-pick or truncate. The user needs the complete picture to make trading decisions.
 - OPTION CHAIN FETCHING: When the user asks for a specific delta range, covered calls, or any filtered view of options — fetch the FULL chain for that expiry (omit noOfStrikes, omit strikePriceNear). Do NOT crawl through multiple strikePriceNear values — that wastes rounds. For simple "show me the chain" requests, use strikePriceNear (current price) + noOfStrikes=25 to get ~25 strikes around ATM.
 - RANKING/FILTERING option chains: When the user asks for "most popular", "highest volume", "top N by OI", or any ranking/filtering of options — you MUST fetch the FULL chain (do NOT use noOfStrikes to limit). You cannot determine "most popular" from a subset — you need all strikes to compare.
-- When analyzing options positions from etrade_account, ALWAYS use the current date/time (provided above) to calculate days-to-expiry. Never estimate or guess expiration dates — compute them from the portfolio data. Verify your time-to-expiry math before reporting. Common covered call strategies use ~30-day income-generating calls, not imminent expirations — frame your analysis accordingly.
-
-## Hotel & Travel Tools
+- When analyzing options positions from etrade_account, ALWAYS use the current date/time (provided above) to calculate days-to-expiry. Never estimate or guess expiration dates — compute them from the portfolio data. Verify your time-to-expiry math before reporting. Common covered call strategies use ~30-day income-generating calls, not imminent expirations — frame your analysis accordingly.`,
+  },
+  travel: {
+    tools: ['hotel', 'travel', 'booking'],
+    routing: [
+      '- Hotels, travel, trips, vacations, accommodation, resorts → use "hotel" tool (search, details, rates, reviews)',
+      '- Weather forecasts, destination info, places, airports, cities → use "travel" tool',
+      '- Hotel reservations, booking, cancellation → use "booking" tool',
+    ],
+    prompt: `## Hotel & Travel Tools
 - Hotel images are auto-displayed by the UI as thumbnails — do NOT output markdown image syntax (no ![](url)).
 - Summarize hotels by: name, star rating, location, price range, key amenities. The user can see the photos automatically.
 - Booking flow (MUST follow these steps in order):
@@ -2138,12 +2075,163 @@ Tool rules:
   Step 3: STOP. Show the user a confirmation summary: hotel name, room, dates, price, cancellation policy, guest name/email from savedGuestProfile. Ask "Shall I confirm this booking?" and WAIT for user response.
   Step 4: ONLY after user explicitly confirms → call booking book (holder auto-filled from saved profile, or pass new holder if user provides different info)
   NEVER skip Step 3. NEVER call booking book in the same tool round as prebook.
+- EXCEPTION to proactive rule — booking "book" action: ALWAYS stop and confirm with the user BEFORE calling booking book. Show them: hotel name, dates, room type, price, guest name. Wait for explicit "yes" / "book it" / "confirm". This spends real money — never auto-book.
 - Rate references (rate_0, rate_1, etc.) map to actual offerIds internally — just pass the reference string to the booking prebook action. prebookId is auto-cached from the last prebook.
 - Rate IDs are ephemeral — prebook promptly after getting rates, do not delay.
 - occupancies format example: [{"adults": 2}] or [{"adults": 2, "children": [5, 8]}]
 - For hotel search, prefer aiSearch for natural language queries (e.g. "beachfront resort in Bali").
 - When searching rates for a SPECIFIC hotel, use hotelIds (e.g. ["lp29df3"]) — NOT countryCode+cityName, which returns all hotels in the city and is much slower.
-- Booking errors: "fraud check" (code 2013) in sandbox mode is usually rate limiting — too many book calls in quick succession. Wait a moment and retry. In production mode, fraud rejections are real and should be reported to the user. "invalid offerId" or "no prebook availability" means the rate expired — search rates again. "invalid prebookId" means the prebook expired — prebook again with a fresh rate.
+- Booking errors: "fraud check" (code 2013) in sandbox mode is usually rate limiting — too many book calls in quick succession. Wait a moment and retry. In production mode, fraud rejections are real and should be reported to the user. "invalid offerId" or "no prebook availability" means the rate expired — search rates again. "invalid prebookId" means the prebook expired — prebook again with a fresh rate.`,
+  },
+  source: {
+    tools: ['source_read', 'source_write', 'source_edit', 'source_delete',
+            'source_git', 'source_run', 'source_test', 'source_project'],
+    condition: () => !!config.sourceDir,
+    prompt: `## Self-Awareness
+You have access to your own source code via source tools. You are "LLM Workbench" — an Express-based chat app.
+
+Source tool workflow:
+1. Use source_project to switch to a different project directory (if needed — always do this BEFORE using other source tools on a non-default project)
+2. Use source_read to browse files (tree/read/grep)
+3. Use source_edit for ALL changes to existing files (targeted string replacement — always prefer this over source_write)
+4. Use source_write ONLY to create new files — never use it to modify existing files
+5. Use source_delete to remove files
+6. Use source_run to execute scripts and commands in the project directory
+7. Use source_test to verify changes work
+8. Use source_git for version control
+
+IMPORTANT: When writing Python code, use correct Python syntax — True, False, None (not JavaScript true, false, null).
+
+CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_write. Do NOT show code snippets, examples, or previews in chat — apply the change directly with tools. Never describe what you would change — just change it. Read the file first with source_read if needed, then edit it.`,
+  },
+  web: {
+    tools: ['web_search', 'web_fetch'],
+    routing: [
+      '- Web questions, current events, news → use "web_search" then "web_fetch"',
+    ],
+    prompt: `## Web Research
+- After web_search, ALWAYS use web_fetch on the most relevant result URL to get full details before answering. Search snippets alone are not sufficient.`,
+  },
+  execution: {
+    tools: ['run_command', 'run_python'],
+    routing: [],
+    prompt: `## Code Execution
+- You are a LOCAL assistant running on the user's machine. You have real shell access via the run_command tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use run_command. NEVER say you cannot run commands or don't have access to the user's system.
+- run_python code quality — MANDATORY rules:
+  1. FORBIDDEN: iterrows(), itertuples(), for-loops over DataFrame rows, iloc[0] inside loops. Use ONLY vectorized pandas: groupby().agg(), merge(), df[condition]['col'].sum(). Any script using iterrows WILL FAIL.
+  2. Keep scripts under 40 lines. One task per script.
+  3. Pick ONE output: print() a short summary OR save a file. Not both.
+  4. Before submitting: mentally verify every string literal, bracket, quote, and f-string brace. A syntax error wastes an entire tool round.
+- run_python error handling: If a script fails, DO NOT retry with the same approach. First run a small diagnostic script (e.g. print columns, print dtypes, print first row) to understand the data, then fix the actual issue. Maximum 1 retry after diagnosis.
+- WHEN TO USE run_python vs direct answer: USE run_python for: any calculation involving more than 3 numbers, aggregations (sum, avg, count, group-by), data with more than 10 rows, date math, filtering/sorting data, or any question where getting the wrong number would be harmful. ANSWER DIRECTLY for: single value lookups, qualitative questions, comparing 2-3 values, or explaining what data means. RULE OF THUMB: if you need to count, sum, or iterate — use Python. Never do mental math on financial data.`,
+  },
+  core: {
+    tools: ['current_datetime'],
+    prompt: null,
+  },
+};
+
+function isGroupEnabled(group) {
+  const hasEnabledTool = group.tools.some(t => !disabledTools.has(t));
+  const conditionMet = !group.condition || group.condition();
+  return hasEnabledTool && conditionMet;
+}
+
+export function isToolGroupEnabled(groupName) {
+  return toolGroups[groupName] ? isGroupEnabled(toolGroups[groupName]) : false;
+}
+
+// Build system prompt from registry
+export function getSystemPrompt({ applets = false } = {}) {
+  const toolList = Object.entries(tools)
+    .filter(([name]) => !disabledTools.has(name))
+    .map(([name, t]) => `- ${name}: ${t.description}`)
+    .join('\n');
+
+  const now = new Date();
+  const datetime = {
+    utc: now.toISOString(),
+    local: now.toString(),
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    offset: now.getTimezoneOffset(),
+  };
+
+  // Collect enabled group prompts and routing lines
+  const groupSections = Object.values(toolGroups)
+    .filter(isGroupEnabled)
+    .map(g => g.prompt)
+    .filter(Boolean)
+    .join('\n\n');
+
+  const routingLines = Object.values(toolGroups)
+    .filter(isGroupEnabled)
+    .map(g => g.routing)
+    .filter(Boolean)
+    .flat()
+    .filter(Boolean);
+
+  // Cross-group warnings (only when both groups are active)
+  if (isGroupEnabled(toolGroups.finance) && isGroupEnabled(toolGroups.travel)) {
+    routingLines.push('- NEVER use etrade_account for travel/hotel queries. NEVER use hotel/travel for financial queries.');
+  }
+
+  const routingSection = routingLines.length
+    ? `\n## Tool Routing — match user intent to the RIGHT tool\n${routingLines.join('\n')}`
+    : '';
+
+  return `You are a helpful, knowledgeable assistant.
+
+## Core Behavior
+Act, don't deliberate. Once you have the information needed to answer or produce output, do it IMMEDIATELY. Do NOT call additional tools to re-verify data you already have. One successful verification is enough — never check the same thing twice. If you have file paths, data, or results from a previous tool call, use them in your response right away.
+
+## Current Date and Time
+Today is ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}. The current time is ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })} (${datetime.timezone}, UTC offset: ${datetime.offset >= 0 ? '-' : '+'}${Math.abs(datetime.offset / 60)}h). UTC: ${datetime.utc}.
+Use this date when answering ANY question involving dates, time, age, deadlines, schedules, or "today/yesterday/tomorrow". Your training data may be outdated — for questions about current events, people in office, recent news, or anything time-sensitive, ALWAYS use web_search first before answering.
+${config.location ? `\n## User Location\nThe user is located in ${config.location}. Use this as the default location for weather, travel, and location-based queries unless the user specifies a different location.` : ''}
+
+## File Access
+Project directory files (CSVs, data files) are served at \`/files/FILENAME\` — use this in applets to fetch saved data (e.g. \`fetch('/files/optionchains_123.csv')\`).
+To display local images from anywhere on the filesystem, use the file proxy: \`/api/file?path=ABSOLUTE_PATH\`
+Example: \`<img src="/api/file?path=/home/ols/Pictures/screenshot.png">\`
+
+## Tool Call Format (MANDATORY — bare JSON without tags is SILENTLY DROPPED)
+
+CRITICAL: Every tool call MUST be wrapped in <tool_call></tool_call> tags. Bare JSON without these tags will NOT execute — it will be displayed as plain text and the tool will never run.
+
+WRONG (silently ignored — tool never runs):
+{"name": "run_python", "arguments": {"code": "print('hello')"}}
+
+CORRECT (this actually executes):
+<tool_call>
+{"name": "run_python", "arguments": {"code": "print('hello')"}}
+</tool_call>
+
+Multiple tool calls (executed in parallel):
+<tool_call>
+{"name": "web_search", "arguments": {"query": "latest news on AAPL"}}
+</tool_call>
+<tool_call>
+{"name": "current_datetime", "arguments": {}}
+</tool_call>
+
+CRITICAL JSON rules:
+- All arguments go FLAT in the "arguments" object. NEVER nest "arguments" inside "arguments".
+- Every opening { must have a matching closing }.
+- WRONG: {"name": "web_search", "arguments": {"query": "test", "arguments": {"maxResults": 5}}}
+- RIGHT: {"name": "web_search", "arguments": {"query": "test", "maxResults": 5}}
+
+Available tools:
+${toolList}
+
+Tool rules:
+- Output ONLY <tool_call> blocks when using tools, no other text before or after.
+- Wait for the tool result before answering.
+- Be proactive: when the user asks for data, CALL the tool immediately with the right parameters. NEVER ask "would you like me to run this?" or "should I re-run with different parameters?" — just do it.
+- REMINDER: tool calls without <tool_call> tags DO NOT EXECUTE.
+${routingSection}
+
+${groupSections}
+
 - NEVER claim you "fabricated" or "didn't actually call" a tool. Tool results in the conversation are real — they came from actual API calls. If you see a tool result, it happened.
 
 ## Response Formatting
@@ -2240,6 +2328,9 @@ For type="html" applets:
 - For tables: sticky headers, alternating row colors (#16213e / #1a1a2e), hover highlight #2a2a4a
 - For interactive controls: style inputs/selects/buttons with the dark palette
 - Canvas API is available for custom drawing and animation
+- JAVASCRIPT SYNTAX: Use null (NOT None), true/false (NOT True/False). These are Python keywords that cause ReferenceError in JS.
+- Data files saved to project directory are available via /files/FILENAME (e.g. fetch('/files/optionchains_123.csv'))
+- APPLET DATA LOADING: When tool results produce CSV files (_autoSaved), load them DIRECTLY in the applet via fetch('/files/FILENAME.csv') and parse in JS. Do NOT use run_python to pre-process or convert CSVs — this wastes tool rounds and introduces column name/value case errors. The CSV is already in the right format. Parse it client-side with split/map.
 
 ` : ''}## FINAL REMINDER
 All tool calls MUST use <tool_call></tool_call> tags. Bare JSON is silently ignored — the tool will NOT run.`;
