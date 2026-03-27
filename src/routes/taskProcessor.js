@@ -258,12 +258,8 @@ async function processOneStep(taskText, prevResult, { systemPrompt, slotId, abor
   console.log(`[task-processor] ${stepLabel}: "${taskText.slice(0, 80)}" | prevResult: ${prevResult ? prevResult.length + ' chars' : 'none'} | savedFiles: ${savedFiles.length}`);
 
   // Build pipeline-aware system prompt — hide future tasks to prevent working ahead
-  const filesNote = savedFiles.length > 0
-    ? `\n\nFiles saved by previous steps (available via run_python):\n${savedFiles.map(f => `- ${f.filename} (from ${f.tool})${f.note ? ' — ' + f.note : ''}`).join('\n')}`
-    : '';
-
   const pipelinePreamble = `\n\n## Task Pipeline
-You are executing ${stepLabel} in a sequential pipeline of ${allTasks.length} total tasks. Another step will handle the rest — you do NOT know what comes next.${filesNote}
+You are executing ${stepLabel} in a sequential pipeline of ${allTasks.length} total tasks. Another step will handle the rest — you do NOT know what comes next.
 
 CRITICAL RULES:
 - Complete ONLY the current task described below. STOP when it is done. Do NOT anticipate or work on anything beyond what is explicitly asked.
@@ -276,13 +272,17 @@ CRITICAL RULES:
   const llmMessages = [{ role: 'system', content: systemPrompt + pipelinePreamble }];
 
   // Isolated context: previous result as user context + current task
+  const filesSection = savedFiles.length > 0
+    ? `\n\n## Available Data Files\nThese files were saved by previous steps. Use run_python with pd.read_csv() to access them:\n${savedFiles.map(f => `- **${f.filename}** (from ${f.tool})`).join('\n')}\n`
+    : '';
+
   if (prevResult) {
     const truncated = prevResult.length > MAX_PREV_RESULT_CHARS
       ? prevResult.slice(0, MAX_PREV_RESULT_CHARS) + `\n\n[...truncated from ${prevResult.length} chars]`
       : prevResult;
-    llmMessages.push({ role: 'user', content: `## Previous Step Output\n\n${truncated}\n\n---\n\n## Current Task\n\n${taskText}` });
+    llmMessages.push({ role: 'user', content: `## Previous Step Output\n\n${truncated}${filesSection}\n\n---\n\n## Current Task\n\n${taskText}` });
   } else {
-    llmMessages.push({ role: 'user', content: taskText });
+    llmMessages.push({ role: 'user', content: filesSection ? `${filesSection}\n\n---\n\n## Current Task\n\n${taskText}` : taskText });
   }
 
   let accumulatedReasoning = '';
