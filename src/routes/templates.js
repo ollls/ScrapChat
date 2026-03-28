@@ -73,13 +73,17 @@ Rules:
 - Fix JavaScript bugs: None→null, True→true, False→false, undeclared variables
 - Replace CDN URLs with local: Chart.js → /lib/chart.min.js
 - Data loading: if template has hardcoded data arrays, convert to fetch from /files/FILENAME.csv or /files/FILENAME.json and parse client-side
-- Use a const FILES = [...] array at the top of <script> for data filenames so the LLM can substitute them when using the template
+- Dynamic file discovery: use fetch('/api/files?match=KEYWORD') to discover data files at runtime — NEVER hardcode filenames that contain timestamps, IDs, or other generated values
+- When multiple files exist for the same data type (e.g. different dates/expiries), deduplicate by logical key and keep the most recent file per key
 - For select/dropdown elements: populate options dynamically from loaded data, never leave empty <select> elements
 - Add error handling for fetch() calls with user-visible error messages
 - Ensure the resize postMessage is present: window.parent.postMessage({type:'resize',height:document.body.scrollHeight},'*') on load and after data renders
 - Remove hardcoded stock symbols, dollar amounts, account names, or personal data — replace with data-driven rendering
+- Do NOT add brand names, service names, or attribution text that was not in the original template
+- Preserve working logic: if existing code (event handlers, select population, data parsing) works correctly, keep it — only refactor what is broken or hardcoded
 - Keep the exact same visual design, CSS, layout, and color scheme
-- Keep it concise — do not add comments or expand minified code` },
+- Keep it concise — do not add comments or expand minified code
+- When outputting minified JS, ensure all statement terminators (semicolons) are preserved` },
       { role: 'user', content: template.html },
     ], { maxTokens: 8192 });
     if (!content?.trim()) return res.status(500).json({ error: 'LLM returned empty response' });

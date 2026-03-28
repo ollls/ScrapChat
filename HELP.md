@@ -100,6 +100,16 @@ Search for hotels, check rates, read reviews, and book rooms. Example: "Find hot
 ### E*TRADE
 If connected, check your portfolio, get stock quotes, view option chains, and analyze positions. Connect via the E*TRADE status indicator in the top bar.
 
+### Logs
+The app maintains detailed logs of all tool interactions in `./logs/` folder with daily files (e.g., `tools_2026-03-26.log`). These logs include:
+- Web searches and fetched content
+- Code execution and shell commands
+- File read/write operations
+- E*TRADE queries and hotel bookings
+- Errors and failures
+
+Ask about logs for details like "What web searches did I run today?" or "Show me all file edits from yesterday."
+
 ## Prompt Variables
 
 Use special variables in prompts and sessions that get filled in automatically or prompt you for input:
