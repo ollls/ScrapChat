@@ -965,7 +965,7 @@ const tools = {
         const buf = Buffer.from(content.slice(0, 8192));
         if (buf.includes(0)) return { error: 'Binary file — use source_write for binary content' };
         if (Buffer.byteLength(content, 'utf-8') > 1024 * 1024) {
-          return { error: `File too large (${Buffer.byteLength(content, 'utf-8')} bytes) — use run_command with sed for large files` };
+          return { error: `File too large (${Buffer.byteLength(content, 'utf-8')} bytes) — use source_run with sed for large files` };
         }
         if (oldStr.includes('[truncated]')) {
           return { warning: 'old_string contains "[truncated]" — this is a truncation marker from source_read, not actual file content. Re-read the file to get the real text.' };
@@ -1117,7 +1117,7 @@ const tools = {
         { match: () => fullCmd.match(/reset\s+--hard/), reason: 'reset --hard discards uncommitted work — use checkout or stash instead' },
         { match: () => fullCmd.match(/push\s+.*--force/) || fullCmd.match(/push\s+-f/), reason: 'force push can destroy remote history — not allowed' },
         { match: () => fullCmd.match(/clean\s+.*-f/), reason: 'clean -f permanently deletes untracked files — use status to review first' },
-        { match: () => sub === 'rebase', reason: 'rebase rewrites history — use merge instead, or run via run_command if needed' },
+        { match: () => sub === 'rebase', reason: 'rebase rewrites history — use merge instead, or run via source_run if needed' },
       ];
       for (const b of blocked) {
         if (b.match()) return { error: `Blocked: ${b.reason}` };
@@ -1237,48 +1237,6 @@ const tools = {
             stdout: tagLineCount(stdout, 8000),
             stderr: ((stderr || '') + (timedOut ? '\n[source_test] killed: exceeded 120s timeout' : '')).slice(0, 4000),
           });
-        });
-      });
-    },
-  },
-  run_command: {
-    description: 'Run a shell command on the server. Requires user approval before execution. Requires a "command" argument (the shell command to run). Use for tasks like listing files, checking system info, installing packages, or any shell operation the user requests. Do NOT use for git commands in source projects — use source_git instead.',
-    parameters: { command: 'string' },
-    execute: async ({ command }, context) => {
-      if (!command?.trim()) return { error: 'command is required' };
-      // Block git commands when source_git is available
-      if (config.sourceDir && /\bgit\s+/.test(command.trim())) {
-        return { error: 'Use source_git for git commands in source projects (e.g. source_git with {"command": "status"}). run_command is for non-git shell commands.' };
-      }
-      if (!context?.confirmFn) return { error: 'No confirmation channel available' };
-
-      let approved;
-      if (context.autorun) {
-        console.log(`[run_command] autorun enabled, skipping confirmation`);
-        approved = true;
-      } else {
-        approved = await context.confirmFn(command);
-      }
-      if (!approved) return { denied: true, message: 'User denied command execution.' };
-
-      const { exec } = await import('child_process');
-      return new Promise((resolve) => {
-        const proc = exec(command, {
-          encoding: 'utf-8',
-          timeout: 30000,
-          maxBuffer: 1024 * 1024,
-          cwd: process.env.HOME,
-        }, (err, stdout, stderr) => {
-          if (err) {
-            resolve({
-              command,
-              exitCode: err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 1 : (err.code ?? 1),
-              stdout: tagLineCount(stdout, 4000),
-              stderr: ((stderr || '') + (err.killed ? '\n[run_command] Process killed: exceeded 30s timeout' : '')).slice(0, 4000),
-            });
-          } else {
-            resolve({ command, exitCode: 0, stdout: tagLineCount(stdout, 8000) });
-          }
         });
       });
     },
@@ -2119,10 +2077,10 @@ CRITICAL RULE: When asked to modify code, IMMEDIATELY use source_edit or source_
 - After web_search, ALWAYS use web_fetch on the most relevant result URL to get full details before answering. Search snippets alone are not sufficient.`,
   },
   execution: {
-    tools: ['run_command', 'run_python'],
+    tools: ['run_python'],
     routing: [],
     prompt: `## Code Execution
-- You are a LOCAL assistant running on the user's machine. You have real shell access via the run_command tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use run_command. NEVER say you cannot run commands or don't have access to the user's system.
+- You are a LOCAL assistant running on the user's machine. You have real shell access via the source_run tool. When the user asks you to run commands, install packages, list files, or perform any shell operation — use source_run. NEVER say you cannot run commands or don't have access to the user's system.
 - run_python code quality — MANDATORY rules:
   1. FORBIDDEN: iterrows(), itertuples(), for-loops over DataFrame rows, iloc[0] inside loops. Use ONLY vectorized pandas: groupby().agg(), merge(), df[condition]['col'].sum(). Any script using iterrows WILL FAIL.
   2. Keep scripts under 40 lines. One task per script.
@@ -2405,10 +2363,9 @@ function repairToolCallJson(raw) {
 
   // Attempt 2: manually extract string arguments for tools with large content
   // Unescape JSON sequences so values have real newlines (not literal \n)
-  // Supports single-arg tools (run_python, run_command) and multi-arg (source_write)
+  // Supports single-arg tools (run_python) and multi-arg (source_write)
   const toolArgMap = {
     run_python: { primary: 'code' },
-    run_command: { primary: 'command' },
     source_write: { primary: 'content', extra: ['path'] },
     source_edit: { primary: 'new_string', extra: ['path', 'old_string'] },
   };
