@@ -28,7 +28,7 @@ ScrapChat connects to a local [llama.cpp](https://github.com/ggerganov/llama.cpp
 
 ```bash
 ./llama.cpp/build/bin/llama-server \
-  --model-url https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-Q6_K.gguf \
+  -hf unsloth/Qwen3.5-27B-GGUF:Q6_K \
   -ngl 99 \
   -c 131072 \
   -fa on \
@@ -41,7 +41,6 @@ ScrapChat connects to a local [llama.cpp](https://github.com/ggerganov/llama.cpp
 ```bash
 ./llama.cpp/build/bin/llama-server \
   -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL \
-  --jinja \
   -ngl 99 \
   -c 131072 \
   -fa on \
