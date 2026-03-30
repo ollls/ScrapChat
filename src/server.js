@@ -8,7 +8,6 @@ import config from './config.js';
 import conversationRoutes from './routes/conversations.js';
 import slotRoutes from './routes/slots.js';
 import healthRoutes from './routes/health.js';
-import etradeRoutes from './routes/etrade.js';
 import promptRoutes from './routes/prompts.js';
 import toolRoutes from './routes/tools.js';
 import templateRoutes from './routes/templates.js';
@@ -16,7 +15,9 @@ import sessionRoutes from './routes/sessions.js';
 import compactRoutes from './routes/compacts.js';
 import taskRoutes from './routes/tasks.js';
 import taskProcessorRoutes from './routes/taskProcessor.js';
+import pluginRoutes from './routes/plugins.js';
 import slots from './services/slots.js';
+import { loadPlugins } from './services/tools.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -30,7 +31,6 @@ app.use(express.static(join(__dirname, 'public')));
 app.use('/api/conversations', conversationRoutes);
 app.use('/api/slots', slotRoutes);
 app.use('/api/health', healthRoutes);
-app.use('/api/etrade', etradeRoutes);
 app.use('/api/prompts', promptRoutes);
 app.use('/api/tools', toolRoutes);
 app.use('/api/templates', templateRoutes);
@@ -38,6 +38,7 @@ app.use('/api/sessions', sessionRoutes);
 app.use('/api/compacts', compactRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/conversations', taskProcessorRoutes);
+app.use('/api/plugins', pluginRoutes);
 
 // Serve project directory files (follows source_project switches)
 app.use('/files', (req, res, next) => {
@@ -127,6 +128,9 @@ app.get('/api/file', async (req, res) => {
 app.get('/', (_req, res) => {
   res.sendFile(join(__dirname, 'views', 'index.html'));
 });
+
+// Load tool plugins before starting the server
+await loadPlugins();
 
 const server = app.listen(config.port, () => {
   console.log(`LLM Workbench running at http://localhost:${config.port}`);
