@@ -454,6 +454,8 @@ function summarize(act, res) {
 
 export default {
   group: 'finance',
+  label: 'E*TRADE Finance',
+  description: 'Portfolio, quotes, option chains, orders, and account management via E*TRADE.',
   condition: () => etrade.isAuthenticated(),
   status: {
     label: 'E*TRADE',

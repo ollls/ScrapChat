@@ -130,9 +130,10 @@ const promptsDropdown = document.getElementById('prompts-dropdown');
 const templateList = document.getElementById('template-list');
 const templatesToggle = document.getElementById('templates-toggle');
 const templatesDropdown = document.getElementById('templates-dropdown');
-const toolsToggle = document.getElementById('tools-toggle');
-const toolsDropdown = document.getElementById('tools-dropdown');
-const toolsList = document.getElementById('tools-list');
+const pluginsToggle = document.getElementById('plugins-toggle');
+const pluginConfigPanel = document.getElementById('plugin-config-panel');
+const pluginConfigList = document.getElementById('plugin-config-list');
+const pluginConfigClose = document.getElementById('plugin-config-close');
 
 // ── Click-to-copy word from assistant messages ───────
 responseArea.addEventListener('click', (e) => {
@@ -2277,7 +2278,6 @@ form.addEventListener('drop', (e) => {
 // ── Prompt Library ────────────────────────────────────
 promptsToggle.addEventListener('click', (e) => {
   e.stopPropagation();
-  toolsDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
   sessionsDropdown.classList.add('hidden');
   compactsDropdown.classList.add('hidden');
@@ -2285,13 +2285,12 @@ promptsToggle.addEventListener('click', (e) => {
   promptsDropdown.classList.toggle('hidden');
 });
 promptsDropdown.addEventListener('click', (e) => e.stopPropagation());
-toolsDropdown.addEventListener('click', (e) => e.stopPropagation());
 
 // ── Templates dropdown ──────────────────────────────────
 templatesToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   promptsDropdown.classList.add('hidden');
-  toolsDropdown.classList.add('hidden');
+
   sessionsDropdown.classList.add('hidden');
   compactsDropdown.classList.add('hidden');
   tasksDropdown.classList.add('hidden');
@@ -2304,7 +2303,7 @@ templatesDropdown.addEventListener('click', (e) => e.stopPropagation());
 sessionsToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   promptsDropdown.classList.add('hidden');
-  toolsDropdown.classList.add('hidden');
+
   templatesDropdown.classList.add('hidden');
   compactsDropdown.classList.add('hidden');
   tasksDropdown.classList.add('hidden');
@@ -2317,7 +2316,7 @@ sessionsDropdown.addEventListener('click', (e) => e.stopPropagation());
 compactsToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   promptsDropdown.classList.add('hidden');
-  toolsDropdown.classList.add('hidden');
+
   sessionsDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
   tasksDropdown.classList.add('hidden');
@@ -2330,7 +2329,7 @@ compactsDropdown.addEventListener('click', (e) => e.stopPropagation());
 tasksToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   promptsDropdown.classList.add('hidden');
-  toolsDropdown.classList.add('hidden');
+
   sessionsDropdown.classList.add('hidden');
   compactsDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
@@ -2728,103 +2727,128 @@ async function refreshTemplates() {
 
 document.addEventListener('click', (e) => {
   if (e.target !== promptsToggle) promptsDropdown.classList.add('hidden');
-  if (e.target !== toolsToggle) toolsDropdown.classList.add('hidden');
   if (e.target !== templatesToggle) templatesDropdown.classList.add('hidden');
   if (e.target !== sessionsToggle) sessionsDropdown.classList.add('hidden');
   if (e.target !== compactsToggle) compactsDropdown.classList.add('hidden');
   if (e.target !== tasksToggle) tasksDropdown.classList.add('hidden');
 });
 
-// ── Tools Panel ──────────────────────────────────────
-toolsToggle.addEventListener('click', (e) => {
+// ── Plugin Config Panel ─────────────────────────────
+pluginsToggle.addEventListener('click', (e) => {
   e.stopPropagation();
+  const showing = !pluginConfigPanel.classList.contains('hidden');
+  // Close other dropdowns
+
   promptsDropdown.classList.add('hidden');
   sessionsDropdown.classList.add('hidden');
   compactsDropdown.classList.add('hidden');
   tasksDropdown.classList.add('hidden');
   templatesDropdown.classList.add('hidden');
-  toolsDropdown.classList.toggle('hidden');
-  if (!toolsDropdown.classList.contains('hidden')) refreshTools();
+  if (showing) {
+    pluginConfigPanel.classList.add('hidden');
+  } else {
+    pluginConfigPanel.classList.remove('hidden');
+    refreshPluginConfig();
+  }
 });
 
-async function refreshTools() {
+pluginConfigClose.addEventListener('click', () => {
+  pluginConfigPanel.classList.add('hidden');
+});
+
+async function refreshPluginConfig() {
   try {
-    const tools = await (await fetch('/api/tools')).json();
-    renderTools(tools);
+    const plugins = await (await fetch('/api/plugins')).json();
+    renderPluginConfig(plugins);
   } catch {}
 }
 
-function renderTools(tools) {
-  toolsList.innerHTML = '';
-  for (const t of tools) {
-    const item = document.createElement('div');
-    item.className = 'relative flex items-center gap-2 px-3 py-2 border-b border-zinc-700/50 hover:bg-zinc-700/30 transition-colors';
+function renderPluginConfig(plugins) {
+  pluginConfigList.innerHTML = '';
+  if (plugins.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'text-zinc-500 text-sm text-center py-8';
+    empty.textContent = 'No configurable plugins found.';
+    pluginConfigList.appendChild(empty);
+    return;
+  }
+  for (const p of plugins) {
+    const card = document.createElement('div');
+    card.className = 'flex items-center justify-between p-4 bg-zinc-800/80 border border-zinc-700/50 rounded-xl transition-colors';
 
+    const info = document.createElement('div');
+    info.className = 'flex flex-col gap-1 min-w-0';
+
+    const label = document.createElement('span');
+    label.className = 'text-sm font-medium truncate';
+    label.style.color = p.enabled ? '#e4e4e7' : '#71717a';
+    label.textContent = p.label;
+
+    const desc = document.createElement('span');
+    desc.className = 'text-xs';
+    desc.style.color = '#a1a1aa';
+    desc.textContent = p.description;
+
+    info.appendChild(label);
+    if (p.description) info.appendChild(desc);
+
+    // Tool list
+    const toolList = document.createElement('div');
+    Object.assign(toolList.style, { marginTop: '8px', display: 'flex', flexWrap: 'wrap', gap: '4px' });
+    for (const t of p.tools) {
+      const chip = document.createElement('span');
+      Object.assign(chip.style, {
+        fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
+        background: p.enabled ? '#27272a' : '#1c1c1e',
+        color: p.enabled ? '#a1a1aa' : '#52525b',
+        cursor: 'default',
+      });
+      chip.textContent = t.name;
+      chip.title = t.description;
+      toolList.appendChild(chip);
+    }
+    info.appendChild(toolList);
+
+    // Slider switch
     const toggle = document.createElement('button');
     Object.assign(toggle.style, {
-      width: '32px', height: '16px', borderRadius: '9999px', position: 'relative',
+      width: '44px', height: '24px', borderRadius: '9999px', position: 'relative',
       flexShrink: '0', transition: 'background 0.2s', cursor: 'pointer', border: 'none',
-      background: t.enabled ? '#6366f1' : '#52525b',
+      background: p.enabled ? '#6366f1' : '#3f3f46', marginLeft: '16px',
     });
     const knob = document.createElement('span');
     Object.assign(knob.style, {
-      position: 'absolute', top: '2px', width: '12px', height: '12px',
+      position: 'absolute', top: '3px', width: '18px', height: '18px',
       borderRadius: '9999px', background: 'white', transition: 'left 0.2s',
-      left: t.enabled ? '16px' : '2px',
+      left: p.enabled ? '22px' : '3px',
     });
     toggle.appendChild(knob);
-    toggle.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const res = await fetch(`/api/tools/${t.name}/toggle`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: !t.enabled }),
-      });
-      if (res.ok) refreshTools();
-    });
 
-    const name = document.createElement('span');
-    Object.assign(name.style, { fontSize: '12px', fontWeight: '500', cursor: 'default', color: t.enabled ? '#e4e4e7' : '#71717a' });
-    name.textContent = t.name;
-
-    item.appendChild(toggle);
-    item.appendChild(name);
-
-    // Popup on hover — appended to body with inline styles to avoid clipping and Tailwind build issues
-    let popup = null;
-    item.addEventListener('mouseenter', () => {
-      popup = document.createElement('div');
-      Object.assign(popup.style, {
-        position: 'fixed', zIndex: '9999', width: '300px', maxHeight: '400px',
-        overflowY: 'auto', padding: '12px', background: '#18181b', border: '1px solid #52525b',
-        borderRadius: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.5)', pointerEvents: 'none',
-      });
-      const descEl = document.createElement('div');
-      Object.assign(descEl.style, { fontSize: '12px', color: '#d4d4d8', lineHeight: '1.6', whiteSpace: 'pre-wrap' });
-      descEl.textContent = t.description;
-      popup.appendChild(descEl);
-      if (t.parameters.length > 0) {
-        const paramsEl = document.createElement('div');
-        Object.assign(paramsEl.style, { marginTop: '8px', fontSize: '10px', color: '#71717a' });
-        paramsEl.textContent = 'params: ' + t.parameters.join(', ');
-        popup.appendChild(paramsEl);
+    toggle.addEventListener('click', async () => {
+      toggle.style.opacity = '0.5';
+      toggle.style.pointerEvents = 'none';
+      try {
+        const res = await fetch(`/api/plugins/${p.group}/toggle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: !p.enabled }),
+        });
+        if (res.ok) {
+          refreshPluginConfig();
+          pollPluginStatuses();
+        }
+      } finally {
+        toggle.style.opacity = '1';
+        toggle.style.pointerEvents = 'auto';
       }
-      document.body.appendChild(popup);
-      const rect = item.getBoundingClientRect();
-      let top = rect.top;
-      let left = rect.right + 8;
-      if (left + 308 > window.innerWidth) left = rect.left - 308 - 8;
-      if (top + popup.offsetHeight > window.innerHeight) top = window.innerHeight - popup.offsetHeight - 8;
-      popup.style.top = top + 'px';
-      popup.style.left = left + 'px';
-    });
-    item.addEventListener('mouseleave', () => {
-      if (popup) { popup.remove(); popup = null; }
     });
 
-    toolsList.appendChild(item);
+    card.appendChild(info);
+    card.appendChild(toggle);
+    pluginConfigList.appendChild(card);
   }
 }
+
 
 function expandPromptMacros(text) {
   const now = new Date();
@@ -3425,11 +3449,6 @@ saveCompactBtn.addEventListener('click', async () => {
       if (cfg.terminal) {
         projBtn.addEventListener('click', () => fetch('/api/terminal', { method: 'POST' }));
       }
-    }
-    if (cfg.terminal) {
-      const termBtn = document.getElementById('terminal-btn');
-      termBtn.classList.remove('hidden');
-      termBtn.addEventListener('click', () => fetch('/api/terminal', { method: 'POST' }));
     }
   } catch {}
   await refreshSidebar();
