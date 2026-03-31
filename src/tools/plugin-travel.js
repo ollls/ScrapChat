@@ -28,6 +28,8 @@ async function saveGuestProfile(profile) {
 
 export default {
   group: 'travel',
+  label: 'Travel & Hotels',
+  description: 'Hotel search, travel info, weather, bookings via LiteAPI.',
   status: {
     label: 'LiteAPI',
     interval: 60000,

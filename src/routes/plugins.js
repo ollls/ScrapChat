@@ -1,7 +1,22 @@
 import { Router } from 'express';
-import { getPluginStatuses, getPluginAuth } from '../services/tools.js';
+import { getPluginStatuses, getPluginAuth, listPluginGroups, setPluginEnabled } from '../services/tools.js';
 
 const router = Router();
+
+// List configurable plugin groups
+router.get('/', async (_req, res) => {
+  const groups = await listPluginGroups();
+  res.json(groups);
+});
+
+// Toggle a plugin group on/off (hot load/unload)
+router.post('/:group/toggle', async (req, res) => {
+  const { enabled } = req.body;
+  if (typeof enabled !== 'boolean') return res.status(400).json({ error: 'enabled (boolean) required' });
+  const result = await setPluginEnabled(req.params.group, enabled);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
 
 // Poll all plugin statuses in one call
 router.get('/status', async (_req, res) => {

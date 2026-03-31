@@ -1,4 +1,4 @@
-import { mkdir, appendFile } from 'fs/promises';
+import { mkdir, appendFile, readFile, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import { readdir } from 'fs/promises';
 import config from '../config.js';
@@ -6,6 +6,7 @@ import config from '../config.js';
 import { fileURLToPath } from 'url';
 const __dirname = import.meta.dirname || (() => { const f = fileURLToPath(import.meta.url); return f.substring(0, f.lastIndexOf('/')); })();
 const LOG_DIR = resolve(__dirname, '../../logs');
+const PLUGIN_CONFIG_PATH = resolve(__dirname, '../../data/plugins.json');
 
 // ── Shared helpers (exported for plugins) ────────────────
 
@@ -46,10 +47,55 @@ export async function logToolCall(toolName, action, { args, rawResult, formatted
 // ── Plugin registry ─────────────────────────────────
 const tools = {};        // name → { description, parameters, execute }
 const toolGroups = {};   // groupName → { tools, condition, routing, prompt, status }
+const pluginModules = {}; // groupName → { file, plugin } (cached for hot reload)
+
+// Groups that are always loaded and not shown in the config UI
+const ALWAYS_ON_GROUPS = new Set(['core', 'web', 'execution']);
+
+async function readPluginConfig() {
+  try {
+    const raw = await readFile(PLUGIN_CONFIG_PATH, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+async function writePluginConfig(cfg) {
+  await writeFile(PLUGIN_CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', 'utf-8');
+}
+
+function registerPlugin(plugin) {
+  const toolNames = [];
+  for (const [name, def] of Object.entries(plugin.tools)) {
+    tools[name] = def;
+    toolNames.push(name);
+  }
+  toolGroups[plugin.group] = {
+    tools: toolNames,
+    condition: plugin.condition || undefined,
+    routing: plugin.routing || [],
+    prompt: plugin.prompt || null,
+    status: plugin.status || null,
+  };
+  console.log(`[tools] Loaded plugin "${plugin.group}" with tools: ${toolNames.join(', ')}`);
+}
+
+function unregisterPlugin(groupName) {
+  const group = toolGroups[groupName];
+  if (!group) return;
+  for (const name of group.tools) {
+    delete tools[name];
+    disabledTools.delete(name);
+  }
+  delete toolGroups[groupName];
+  console.log(`[tools] Unloaded plugin "${groupName}"`);
+}
 
 export async function loadPlugins() {
   const files = await readdir(__dirname);
   const pluginFiles = files.filter(f => f.startsWith('plugin-') && f.endsWith('.js')).sort();
+  const cfg = await readPluginConfig();
 
   for (const file of pluginFiles) {
     const mod = await import(join(__dirname, file));
@@ -59,22 +105,58 @@ export async function loadPlugins() {
       continue;
     }
 
-    const toolNames = [];
-    for (const [name, def] of Object.entries(plugin.tools)) {
-      tools[name] = def;
-      toolNames.push(name);
+    // Cache module for hot reload
+    pluginModules[plugin.group] = { file, plugin };
+
+    // Always-on plugins load unconditionally; others check config
+    if (!ALWAYS_ON_GROUPS.has(plugin.group) && cfg[plugin.group] === false) {
+      console.log(`[tools] Plugin "${plugin.group}" disabled by config — skipped`);
+      continue;
     }
 
-    toolGroups[plugin.group] = {
-      tools: toolNames,
-      condition: plugin.condition || undefined,
-      routing: plugin.routing || [],
-      prompt: plugin.prompt || null,
-      status: plugin.status || null,
-    };
-
-    console.log(`[tools] Loaded plugin "${plugin.group}" with tools: ${toolNames.join(', ')}`);
+    registerPlugin(plugin);
   }
+}
+
+// ── Plugin config API ──────────────────────────────
+export async function listPluginGroups() {
+  const cfg = await readPluginConfig();
+  return Object.entries(pluginModules)
+    .filter(([group]) => !ALWAYS_ON_GROUPS.has(group))
+    .map(([group, { plugin }]) => ({
+      group,
+      label: plugin.label || group.charAt(0).toUpperCase() + group.slice(1),
+      description: plugin.description || '',
+      enabled: !!toolGroups[group],
+      tools: Object.entries(plugin.tools).map(([name, def]) => ({
+        name,
+        description: def.description.split('\n')[0],
+      })),
+    }));
+}
+
+export async function setPluginEnabled(groupName, enabled) {
+  if (ALWAYS_ON_GROUPS.has(groupName)) return { error: 'Cannot toggle always-on plugins' };
+  const cached = pluginModules[groupName];
+  if (!cached) return { error: `Unknown plugin: ${groupName}` };
+
+  const cfg = await readPluginConfig();
+
+  if (enabled && !toolGroups[groupName]) {
+    // Hot-load: register the plugin
+    registerPlugin(cached.plugin);
+    cfg[groupName] = true;
+    await writePluginConfig(cfg);
+    return { group: groupName, enabled: true };
+  } else if (!enabled && toolGroups[groupName]) {
+    // Hot-unload: unregister the plugin
+    unregisterPlugin(groupName);
+    cfg[groupName] = false;
+    await writePluginConfig(cfg);
+    return { group: groupName, enabled: false };
+  }
+
+  return { group: groupName, enabled: !!toolGroups[groupName] };
 }
 
 // ── Command confirmation (queue-based for parallel tool calls) ──

@@ -42,6 +42,8 @@ function simpleDiff(oldContent, newContent, filePath) {
 
 export default {
   group: 'source',
+  label: 'Source Code',
+  description: 'Read, write, edit, and manage source code files. Git operations, project switching, and test runner.',
   condition: () => !!config.sourceDir,
   prompt: `## Self-Awareness
 You have access to your own source code via source tools. You are "LLM Workbench" — an Express-based chat app.

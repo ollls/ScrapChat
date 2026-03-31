@@ -12,4 +12,6 @@ export {
   isToolGroupEnabled,
   getPluginStatuses,
   getPluginAuth,
+  listPluginGroups,
+  setPluginEnabled,
 } from '../tools/index.js';
