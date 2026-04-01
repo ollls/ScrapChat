@@ -2,7 +2,7 @@ import { Router } from 'express';
 import conversations from '../services/conversations.js';
 import slots from '../services/slots.js';
 import { streamChatCompletion, parseSSEChunks, collectChatCompletion } from '../services/llm.js';
-import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled } from '../services/tools.js';
+import { getSystemPrompt, parseToolCalls, executeTool, requestConfirmation, resolveConfirmation, cancelConfirmation, isToolGroupEnabled, getTaskmasterPrompt } from '../services/tools.js';
 import { getTemplateByName } from '../services/templates.js';
 import { getCompactByColor } from '../services/compacts.js';
 
@@ -631,6 +631,34 @@ Fetch fresh data using the appropriate tools first if the content requires it, t
         conversations.updateTitle(conv.id, title);
       }
     }
+  }
+});
+
+// Decompose prompt into task list (Taskmaster)
+router.post('/:id/decompose', async (req, res) => {
+  const { prompt } = req.body;
+  if (!prompt) return res.status(400).json({ error: 'prompt required' });
+  try {
+    const taskmasterPrompt = await getTaskmasterPrompt();
+    const { content: raw } = await collectChatCompletion([
+      { role: 'system', content: taskmasterPrompt },
+      { role: 'user', content: prompt },
+    ], { signal: AbortSignal.timeout(30000), maxTokens: 1024, temperature: 0.3 });
+    let tasks = raw?.trim() || '';
+    // Strip think blocks
+    tasks = tasks.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    if (!tasks) return res.json({ tasks: `- ${prompt}`, single: true });
+    // Strip wrapping code fences if LLM added them
+    tasks = tasks.replace(/^```(?:markdown)?\n?/i, '').replace(/\n?```$/i, '').trim();
+    // Validate: must contain at least one bullet
+    if (!tasks.includes('- ')) {
+      return res.json({ tasks: `- ${prompt}`, single: true });
+    }
+    // Count top-level tasks
+    const topLevel = tasks.split('\n').filter(l => /^- /.test(l)).length;
+    res.json({ tasks, single: topLevel <= 1 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

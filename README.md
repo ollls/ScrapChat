@@ -122,6 +122,46 @@ Save any visualization the AI creates and reuse it. Type `[template: Weather]` a
 
 All three menus support **drag-to-reorder** and **inline title editing**.
 
+## Task Pipeline
+
+Break complex requests into sequential steps that execute independently with isolated context. Instead of one massive prompt that exhausts the context window, each step receives only the previous step's output — keeping context small, responses focused, and enabling workflows that would otherwise exceed LLM memory limits.
+
+### Why It Matters: Context Efficiency
+
+With a 65K context window, a single chat turn can fill up fast — system prompt, conversation history, tool results, and the response all compete for space. The task pipeline sidesteps this entirely:
+
+- Each step gets only the **previous step's output** (capped at 32K chars) + system prompt
+- Context resets between steps — it never grows
+- Large datasets (option chains, portfolio data) bypass context via **auto-saved CSV files** — the filename is passed, not the data
+- A 5-step pipeline that would need ~100K+ in a single turn runs fine in 32K per step
+
+### How It Works
+
+Write tasks as a bullet list in the input box (click the list button or just type bullets):
+
+```
+- Get stock data
+  - get AMD current stock price
+  - get NVDA current stock price
+- Create a comparison chart of both stocks
+```
+
+**Top-level bullets** (`- task`) are sequential — each receives the previous step's output. **Indented bullets** (`  - subtask`) are independent — they run in isolation and their results merge before passing to the next step.
+
+Hit **Ctrl+Enter** to execute. Each step runs through the full tool loop (web search, Python, E\*TRADE, etc.) with up to 20 tool rounds.
+
+### Taskmaster
+
+Click the wand button next to the input to auto-decompose any prompt into a task list. Type your request normally, click the wand, and the LLM breaks it into structured steps. Review and edit the generated list, then submit. The decomposition prompt lives in `data/TASKMASTER.md` — edit it to tune how tasks are split.
+
+### Review Mode
+
+Enable the **Review** toggle to pause after each step with **Continue** / **Retry** buttons. Inspect intermediate output before it flows downstream. Retry re-runs the step from scratch (temperature sampling may produce different output). Off by default for uninterrupted execution.
+
+### Saved Tasks
+
+Save frequently-used task lists from the Tasks menu. Click to reload into the input. The regenerate button (↻) on task list messages re-runs the same pipeline.
+
 ## Configuration
 
 All settings via `.env`:
@@ -165,7 +205,7 @@ Set `PYTHON_VENV=~/finance_venv` in `.env`.
 - **Top bar** — Session buttons, service status indicators, LLM/search engine switcher, context usage, elapsed timer
 - **Sidebar** — Conversation list with switching, delete, and pin (📌) to persist across restarts
 - **Chat** — Markdown, syntax highlighting, Mermaid diagrams, collapsible reasoning, interactive applets
-- **Input** — Image attachments (paste, drag, button), checkboxes for Applets/Autorun/Think
+- **Input** — Image attachments (paste, drag, button), toggles for Autorun/Think/Review/Precision, list mode and Taskmaster wand buttons
 - **Diff previews** — Color-coded diffs for all source code changes, visible even with Autorun enabled
 - **Menus** — Tools (toggle on/off), Prompts, Sessions, Templates
 

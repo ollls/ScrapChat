@@ -102,14 +102,14 @@ async function streamClaudeCompletion(messages, { signal } = {}) {
 
 // ── Non-streaming ────────────────────────────────────────
 
-export async function collectChatCompletion(messages, { slotId, signal, maxTokens } = {}) {
+export async function collectChatCompletion(messages, { slotId, signal, maxTokens, temperature } = {}) {
   if (config.llm.backend === 'claude') {
     return collectClaudeCompletion(messages, { signal, maxTokens });
   }
-  return collectLlamaCompletion(messages, { slotId, signal, maxTokens });
+  return collectLlamaCompletion(messages, { slotId, signal, maxTokens, temperature });
 }
 
-async function collectLlamaCompletion(messages, { slotId, signal, maxTokens } = {}) {
+async function collectLlamaCompletion(messages, { slotId, signal, maxTokens, temperature } = {}) {
   const body = {
     messages,
     stream: false,
@@ -117,6 +117,7 @@ async function collectLlamaCompletion(messages, { slotId, signal, maxTokens } = 
   };
   if (maxTokens) body.max_tokens = maxTokens;
   if (slotId != null) body.id_slot = slotId;
+  if (temperature != null) body.temperature = temperature;
 
   const res = await fetch(`${config.llama.baseUrl}/v1/chat/completions`, {
     method: 'POST',

@@ -268,6 +268,13 @@ export function getPluginAuth(groupName) {
   return toolGroups[groupName]?.status?.auth || null;
 }
 
+// ── Taskmaster prompt (read from data/TASKMASTER.md) ──
+const TASKMASTER_PATH = resolve(__dirname, '../../data/TASKMASTER.md');
+
+export async function getTaskmasterPrompt() {
+  return readFile(TASKMASTER_PATH, 'utf-8');
+}
+
 // ── Precision Mode rules (standalone, not tied to any plugin) ──
 const PRECISION_RULES = `## Precision Mode — Computation Discipline
 - NEVER do mental math, manual arithmetic, or approximate calculations. For ANY computation involving more than 3 numbers, aggregations (sum, avg, count, group-by), data with more than 10 rows, date math, filtering/sorting, or any question where getting the wrong number would be harmful — use run_python.

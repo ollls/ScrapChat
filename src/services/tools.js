@@ -14,4 +14,5 @@ export {
   getPluginAuth,
   listPluginGroups,
   setPluginEnabled,
+  getTaskmasterPrompt,
 } from '../tools/index.js';

@@ -236,3 +236,39 @@
   border-color: #6366f1;
   background: rgba(99, 102, 241, 0.05);
 }
+
+/* Slider toggle switches (matching plugin panel style) */
+.slider-toggle .slider-track {
+  width: 28px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #3f3f46;
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.slider-toggle .slider-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: #71717a;
+  transition: left 0.2s, background 0.2s;
+}
+.slider-toggle input:checked ~ .slider-track {
+  background: var(--slider-color, #6366f1);
+}
+.slider-toggle input:checked ~ .slider-track::after {
+  left: 14px;
+  background: white;
+}
+.slider-toggle .slider-label {
+  color: #71717a;
+  transition: color 0.2s;
+}
+.slider-toggle input:checked ~ .slider-label {
+  color: #d4d4d8;
+}
