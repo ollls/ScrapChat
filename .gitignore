@@ -8,5 +8,6 @@ data/*
 !data/compacts.json
 !data/tasks.json
 !data/TASK_PIPELINE.md
+!data/TASKMASTER.md
 logs/
 .claude/settings.local.json

@@ -6,7 +6,7 @@ const state = {
   healthy: false,
   maxContext: 131072,
   pendingImages: [], // { dataUrl, mimeType, name }
-  appletsEnabled: localStorage.getItem('appletsEnabled') !== 'false', // default true
+  appletsEnabled: true, // always on
   autorunEnabled: localStorage.getItem('autorunEnabled') === 'true', // default false
   thinkEnabled: localStorage.getItem('thinkEnabled') !== 'false', // default true
   sessionType: null, // current session color: 'blue'|'cyan'|'amber'|'coral'|'sgreen'|'navy'|'lavender'
@@ -107,12 +107,12 @@ const pluginStatusContainer = document.getElementById('plugin-status-container')
 const imageInput = document.getElementById('image-input');
 const attachBtn = document.getElementById('attach-btn');
 const imagePreviewStrip = document.getElementById('image-preview-strip');
-const appletToggle = document.getElementById('applet-toggle');
 const autorunToggle = document.getElementById('autorun-toggle');
 const thinkToggle = document.getElementById('think-toggle');
 const reviewToggle = document.getElementById('review-toggle');
 const reviewToggleLabel = document.getElementById('review-toggle-label');
 const precisionToggle = document.getElementById('precision-toggle');
+const taskmasterBtn = document.getElementById('taskmaster-btn');
 const savePromptBtn = document.getElementById('save-prompt-btn');
 const saveSessionBtn = document.getElementById('save-session-btn');
 const sessionList = document.getElementById('session-list');
@@ -747,8 +747,13 @@ async function regenerateFrom(wrapper) {
   // Remove DOM elements from this wrapper onward
   while (wrapper.nextSibling) wrapper.nextSibling.remove();
   wrapper.remove();
-  // Re-send — sendMessage will append user+assistant bubbles
-  await sendMessage(text, images);
+  // Detect task list and re-run through task pipeline
+  const tasks = parseTaskList(text);
+  if (tasks.length > 1) {
+    await sendTasks(tasks, text);
+  } else {
+    await sendMessage(text, images);
+  }
   // Re-render with proper msgIndex on all bubbles
   const updated = await api.getConversation(convId);
   renderMessages(updated.messages);
@@ -2272,7 +2277,6 @@ function toggleListMode(force) {
   state.listMode = typeof force === 'boolean' ? force : !state.listMode;
   listModeBtn.classList.toggle('text-indigo-400', state.listMode);
   listModeBtn.classList.toggle('text-zinc-500', !state.listMode);
-  reviewToggleLabel.classList.toggle('hidden', !state.listMode);
   updateListModeSaveButtons();
   if (state.listMode) {
     // Prefix first bullet if textarea is empty or doesn't start with "- "
@@ -2342,12 +2346,6 @@ function clearPendingImages() {
 
 attachBtn.addEventListener('click', () => imageInput.click());
 
-// Applet toggle
-appletToggle.checked = state.appletsEnabled;
-appletToggle.addEventListener('change', () => {
-  state.appletsEnabled = appletToggle.checked;
-  localStorage.setItem('appletsEnabled', state.appletsEnabled);
-});
 
 // Autorun toggle
 autorunToggle.checked = state.autorunEnabled;
@@ -2375,6 +2373,35 @@ precisionToggle.checked = state.precisionEnabled;
 precisionToggle.addEventListener('change', () => {
   state.precisionEnabled = precisionToggle.checked;
   localStorage.setItem('precisionEnabled', state.precisionEnabled);
+});
+
+// Taskmaster action button — decompose current prompt into task list
+taskmasterBtn.addEventListener('click', async () => {
+  if (!requireSession()) return;
+  const content = input.value.trim();
+  if (!content) return;
+  try {
+    taskmasterBtn.classList.add('animate-pulse', 'text-violet-400');
+    taskmasterBtn.disabled = true;
+    const res = await fetch(`/api/conversations/${state.currentConversationId}/decompose`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: content }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    if (data.single) return; // too simple to decompose
+    input.value = data.tasks;
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+    if (!state.listMode) toggleListMode(true);
+    input.focus();
+  } catch (err) {
+    console.error('Taskmaster decompose failed:', err);
+  } finally {
+    taskmasterBtn.classList.remove('animate-pulse', 'text-violet-400');
+    taskmasterBtn.disabled = false;
+  }
 });
 
 imageInput.addEventListener('change', () => {
@@ -3421,10 +3448,11 @@ function renderTasks(tasks) {
       input.value = t.text;
       input.style.height = 'auto';
       input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-      if (t.text.startsWith('- ')) {
-        if (!state.listMode) toggleListMode(true);
-      }
+      // Activate list mode if text contains bullet lines
+      const trimmed = t.text.trimStart();
+      if (trimmed.includes('- ') && !state.listMode) toggleListMode(true);
       input.focus();
+      tasksDropdown.classList.add('hidden');
     });
 
     item.appendChild(grip);

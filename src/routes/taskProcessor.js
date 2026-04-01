@@ -52,6 +52,7 @@ router.post('/:id/tasks', async (req, res) => {
   if (!conv) return res.status(404).json({ error: 'Not found' });
 
   const { tasks, applets, autorun, review, precision } = req.body;
+  console.log(`[task-processor] autorun=${autorun}`);
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return res.status(400).json({ error: 'tasks array required' });
   }

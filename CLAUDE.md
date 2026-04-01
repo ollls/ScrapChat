@@ -45,6 +45,8 @@ src/
     plugin-etrade.js       # etrade_account + CSV/Markdown formatters, summarize helpers
   routes/
     conversations.js       # CRUD + POST /:id/messages (SSE streaming), confirm/deny commands, refine endpoint
+    tasks.js               # Task pipeline CRUD + reorder
+    taskProcessor.js       # Task pipeline execution engine (context chaining, subtask merging, SSE events)
     slots.js               # Slot status, pin/unpin endpoints
     health.js              # Health checks: llama, internet, search engines (keiro/tavily), liteapi
     etrade.js              # E*TRADE OAuth flow (status, auth start, auth complete, disconnect)
@@ -62,11 +64,12 @@ src/
     etrade.js              # E*TRADE OAuth 1.0a client + API wrapper
     liteapi.js             # LiteAPI hotel/travel client
     templates.js           # Template persistence + reorder + update
+    tasks.js               # Task pipeline persistence (data/tasks.json)
   views/index.html         # Main chat UI (full-width top bar, sidebar, slot panel)
   public/js/app.js         # Client-side: conversations, streaming, slots, images, applets, prompts, sessions UI
   public/css/              # Tailwind input/output
   public/lib/chart.min.js  # Chart.js v4 static bundle (served at /lib/chart.min.js)
-data/                      # Runtime data dir: saved files, prompts.json, sessions.json (served at /files/)
+data/                      # Runtime data dir: saved files, prompts.json, sessions.json, tasks.json (served at /files/)
   plugins.json             # Plugin enable/disable config (auto-created on first toggle, gitignored)
   pinned/                  # Pinned conversation JSON files (<id>.json)
 logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
@@ -86,6 +89,9 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 | `/api/conversations/:id/compact` | POST | LLM summarizes conversation, replaces messages with summary |
 | `/api/conversations/:id/confirm` | POST | Approve/deny pending command (run_command tool) |
 | `/api/conversations/:id/refine` | POST | LLM-powered prompt refinement from reasoning trace |
+| `/api/conversations/:id/decompose` | POST | Taskmaster: LLM decomposes prompt into task list |
+| `/api/conversations/:id/tasks` | POST | Execute task pipeline (SSE streaming) |
+| `/api/conversations/:id/task-review` | POST | Continue or retry a paused pipeline step |
 | `/api/slots` | GET | Slot status enriched with conversation mapping |
 | `/api/slots/pin` | POST | Pin conversation to slot |
 | `/api/slots/unpin` | POST | Unpin conversation from slot |
@@ -111,6 +117,9 @@ logs/                      # Tool call logs (tools_YYYY-MM-DD.log)
 | `/api/plugins/:group/toggle` | POST | Hot-load/unload a plugin group |
 | `/api/tools` | GET | List tools with enabled status |
 | `/api/tools/:name/toggle` | POST | Enable/disable a tool |
+| `/api/tasks` | GET/POST | List/create tasks (saved task lists) |
+| `/api/tasks/:id` | PATCH/DELETE | Update/delete task |
+| `/api/tasks/reorder` | PUT | Reorder tasks |
 
 ## Commands
 - `npm run dev` — start dev server with --watch
@@ -265,6 +274,60 @@ Red square icon button in the input area button column (below Send). Hidden by d
 ### Refine Button
 Small "Refine" button on thinking/reasoning `<details>` blocks. Sends the original user prompt + reasoning trace to the LLM via `POST /api/conversations/:id/refine`. The LLM analyzes where it struggled or made assumptions and returns an improved prompt (max 3x original length). Result loaded into the input textarea for user review. Shows "Already optimal" if the prompt doesn't need improvement.
 
+### Task Pipeline
+Sequential LLM execution system for breaking complex multi-step workflows into discrete tasks with isolated context. Instead of one long prompt, each task runs independently and receives only the previous step's output.
+
+**Two levels — structure declares intent:**
+
+| Level | Syntax | Meaning | Context behavior |
+|---|---|---|---|
+| Top-level | `- task` | Dependent sequential step | Receives previous step's output (chaining) |
+| Indented | `  - subtask` | Independent work under a group | Receives only the parent's incoming context (isolation) |
+
+Indentation = independence, flat = chaining. No configuration needed.
+
+**Flat tasks (chained):** Each step sees only the immediately preceding output. `Task 2` gets `Task 1`'s result. Context stays small.
+
+**Nested tasks (isolated + merged):** Parent is a label (not executed). Subtasks execute sequentially with full isolation from siblings — all receive the same incoming context. After all complete, results are merged with section headers and passed downstream.
+
+**Context flow:** Each step gets a pipeline-aware system prompt addition (step number, "complete ONLY the current task" rules). Previous output framed as user message with "Previous Step Output" header (max 32K chars). The LLM never sees the full task list.
+
+**Execution engine:** Each task/subtask runs through the same tool loop as regular chat (up to 20 tool rounds, repeat detection, parallel tool cap, confirmation flow, full SSE streaming).
+
+**File exchange between steps:** Large tool results (option chains, etc.) auto-save to CSV files. The task processor tracks all auto-saved files across the pipeline. Each subsequent step receives these filenames in its system prompt ("Files saved by previous steps") so data survives context isolation. Files act as a side channel bypassing context limits.
+
+**Review mode:** Review checkbox appears in input area when list mode is active. When enabled, pipeline pauses after each completed task (except last) with Continue/Retry buttons. Continue accepts output and proceeds. Retry discards output, restores context to pre-task state, and re-runs (fresh LLM call, may produce different output due to temperature). Backend emits `{task_review}` SSE event and pauses on a promise; frontend POSTs to `/api/conversations/:id/task-review` with `{action: "continue"|"retry"}` to unblock.
+
+**Input — bullet list editing:** Activated by clicking bullet-list button or pasting a multi-line bullet list (auto-detected). Keyboard: Enter (new bullet), Tab (indent to subtask, max 1 level), Shift+Tab (outdent), Backspace on empty (outdent then remove), Ctrl+Enter (submit). In list mode: Save Prompt saves to Tasks menu (not Prompts); Save Session and Save Compact disabled.
+
+**Storage:** Task runs stored as a single assistant message with `text` (backward-compatible markdown) and `taskRun` array (structured metadata with per-step results and tool uses).
+
+**SSE events:** `{task_start}` → `{subtask_start}` → (streaming events) → `{subtask_complete}` → `{task_complete}` → `{task_review}` (if enabled) → `{task_error}` (on failure, pipeline stops) → `[DONE]`
+
+**Task list persistence:** Saved task lists stored in `data/tasks.json` via `src/services/tasks.js`. CRUD + reorder via `/api/tasks` routes. Tasks menu in top bar dropdown (alongside Prompts, Sessions, Templates) with same drag/edit/delete UI pattern.
+
+### Taskmaster
+Checkbox labeled "Taskmaster" (violet accent) in the input area. When enabled, user prompts are auto-decomposed into task pipeline lists before execution.
+
+**Flow:** User types prompt → Submit → backend calls `POST /:id/decompose` (non-streaming LLM call, 30s timeout, 1024 max tokens, temperature 0.3) → LLM returns bullet list → frontend loads into textarea in list mode for user review/edit → user submits with Ctrl+Enter → runs through existing task pipeline.
+
+**Single-task safeguard:** If the LLM returns ≤1 top-level task (simple request), the prompt is sent as a normal message — no pipeline overhead. Backend returns `{ tasks, single: true }`.
+
+**Decomposition prompt:** `TASKMASTER_PROMPT` constant in `src/tools/index.js` (exported through barrel). Instructs LLM to output exact bullet list format the pipeline accepts. Includes:
+- Flat vs nested rules: flat (top-level) = chained sequential steps; nested (indented) = independent work that merges
+- Max 6 top-level tasks, max 5 subtasks per group
+- "When NOT to split" rules (simple questions, single lookups, conversational)
+- Context-isolation awareness: each task must be self-contained since it won't see the original request
+- 5 few-shot examples covering flat, nested, single-task, and mixed patterns
+- Tool-aware hints (knows available tools to split correctly)
+- Anti-patterns: no meta-tasks ("understand", "plan", "summarize"), no request repetition
+
+**Backend:** `POST /api/conversations/:id/decompose` in `src/routes/conversations.js`. Uses `collectChatCompletion` (same pattern as refine/title generation). Strips `<think>` blocks and code fences. Validates output contains bullets, falls back to single-task if not.
+
+**Frontend:** `state.taskmasterEnabled` persisted to localStorage (default: off). Send button shows `⟳` during decomposition. On error, falls back to normal send. Images bypass taskmaster (sent as normal message).
+
+**Toggle:** State in `state.taskmasterEnabled`, persisted to localStorage (default: off). Checkbox in input area after Precision.
+
 ### Think Toggle
 Checkbox labeled "Think" next to Autorun. Controls visibility of reasoning/thinking blocks, tool content ("Working..."), tool status messages, and tool use details ("Used web_search", etc.) during streaming.
 
@@ -372,7 +435,7 @@ The `/api/conversations/:id/messages` endpoint streams these SSE events:
 - `[DONE]` — stream complete
 
 ## UI Layout
-Full-width top bar spanning entire window width with: colored session `+` buttons (left, 7 primary + 3 collapsible extra), Plugins button, status indicator grid (2 rows: core + APIs), menus (Prompts/Sessions/Templates), Context bar + Slots (right). Below: sidebar (conversation list) + main chat area side by side. Plugins config opens as a full-width panel overlaying the chat area. Input area has textarea with vertical button stack (Send/Stop/Save Prompt/Save Session) and checkboxes (Applets/Autorun/Think/Precision).
+Full-width top bar spanning entire window width with: colored session `+` buttons (left, 7 primary + 3 collapsible extra), Plugins button, status indicator grid (2 rows: core + APIs), menus (Prompts/Sessions/Templates), Context bar + Slots (right). Below: sidebar (conversation list) + main chat area side by side. Plugins config opens as a full-width panel overlaying the chat area. Input area has textarea with vertical button stack (Send/Stop/Save Prompt/Save Session), list mode button, and checkboxes (Applets/Autorun/Think/Precision/Taskmaster/Review).
 
 ### Conversation Pinning
 Pin button (📌) in sidebar persists conversations to disk across server restarts. Compact button (≡) on pinned conversations sends the full conversation to the LLM for summarization — messages are irreversibly replaced with a structured summary preserving outcomes, decisions, and lessons learned. Two-click confirmation (click → "Compact?" → click again). Especially useful for long coding sessions with many tool rounds. Pinned conversations saved as individual JSON files in `data/pinned/<id>.json`. On startup, all pinned files loaded into the in-memory Map. Any mutation to a pinned conversation (new message, title change, token count) auto-saves to disk. `slotId` saved as `null` (slots are ephemeral). Sidebar sorts pinned conversations first, then by `updatedAt`. Unpinning removes the file but conversation stays in memory until restart.

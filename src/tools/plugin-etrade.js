@@ -654,7 +654,7 @@ export default {
                 ...summarize(action, result),
                 savedFile: { filename: autoFile, size: Buffer.byteLength(csvContent, 'utf-8') },
                 _autoSaved: true,
-                _note: `${rowCount} rows — auto-saved to ${autoFile} in project directory. Preview shows first 15 rows. In run_python use: pd.read_csv('${autoFile}')`,
+                _note: `${rowCount} rows — auto-saved to ${autoFile} in project directory. Columns: ${csvContent.split('\n')[0]}. In run_python use: pd.read_csv('${autoFile}')`,
                 ...(preview ? { _markdown: preview } : {}),
               };
               await _log(result, out);
