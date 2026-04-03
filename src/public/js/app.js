@@ -555,7 +555,7 @@ function createAppletIframe(applet) {
   }
 
   // Inject style reset to prevent scrollbars inside iframe
-  const iframeReset = '<style>html{overflow:hidden}body{min-height:0!important;margin:0;overflow:visible}img{max-width:100%;height:auto}</style>';
+  const iframeReset = '<style>html,body{margin:0;min-height:0!important;overflow:visible}img,svg{max-width:100%;height:auto}</style>';
   if (html.includes('<head>')) {
     html = html.replace(/<head>/i, '<head>' + iframeReset);
   } else if (html.includes('<html>')) {
@@ -567,10 +567,10 @@ function createAppletIframe(applet) {
   // Inject auto-resize script if no postMessage present
   if (!html.includes('postMessage')) {
     const resizeScript = `<script>
-function _rsz(){var d=document.documentElement,b=document.body,od=d.style.overflow,ob=b.style.overflow;d.style.overflow='visible';b.style.overflow='visible';var h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight)+2;d.style.overflow=od;b.style.overflow=ob;window.parent.postMessage({type:'resize',height:h},'*');}
+function _rsz(){var d=document.documentElement,b=document.body,h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight)+2;document.querySelectorAll('svg').forEach(function(s){var r=s.getBoundingClientRect();var bot=r.top+r.height;if(bot>h)h=Math.ceil(bot)+2;});window.parent.postMessage({type:'resize',height:h},'*');}
 new ResizeObserver(_rsz).observe(document.body);
-window.addEventListener('load',_rsz);
-document.querySelectorAll('img').forEach(i=>{i.complete?_rsz():i.addEventListener('load',_rsz);});
+window.addEventListener('load',function(){_rsz();setTimeout(_rsz,100);setTimeout(_rsz,500);});
+document.querySelectorAll('img').forEach(i=>{i._rsz=1;i.complete?_rsz():i.addEventListener('load',_rsz);});
 new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rsz){i._rsz=1;i.addEventListener('load',_rsz);}});}).observe(document.body,{childList:true,subtree:true});
 <\/script>`;
     html = html.replace(/<\/body>/i, resizeScript + '</body>');
@@ -582,6 +582,14 @@ new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rs
   iframe.sandbox = 'allow-scripts allow-same-origin';
   iframe.srcdoc = html;
   iframe.style.cssText = 'width:100%;height:500px;border:1px solid #3f3f46;border-radius:0.5rem;overflow:hidden;display:block';
+  iframe.addEventListener('load', () => {
+    try {
+      const doc = iframe.contentDocument;
+      let h = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight) + 2;
+      doc.querySelectorAll('svg').forEach(s => { const r = s.getBoundingClientRect(); const bot = r.top + r.height; if (bot > h) h = Math.ceil(bot) + 2; });
+      if (h > 100) iframe.style.height = Math.min(h, 20000) + 'px';
+    } catch {}
+  });
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold px-3 py-1 rounded mt-1 transition-colors';
