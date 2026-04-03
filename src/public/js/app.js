@@ -1057,6 +1057,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
                   if (r.switched || r.current) {
                     const dir = r.current || '';
                     const short = dir.replace(/^\/home\/[^/]+/, '~');
+                    state.sourceDir = short;
                     const projBtn = document.getElementById('project-btn');
                     projBtn.title = 'Project: ' + short;
                   }
@@ -3679,14 +3680,43 @@ saveCompactBtn.addEventListener('click', async () => {
   try {
     const cfg = await (await fetch('/api/config')).json();
     state.location = cfg.location || '';
-    if (cfg.sourceDir) {
-      const short = cfg.sourceDir.replace(/^\/home\/[^/]+/, '~');
-      state.sourceDir = short;
+    {
       const projBtn = document.getElementById('project-btn');
-      projBtn.title = 'Project: ' + short;
+      if (cfg.sourceDir) {
+        const short = cfg.sourceDir.replace(/^\/home\/[^/]+/, '~');
+        state.sourceDir = short;
+        projBtn.title = 'Project: ' + short;
+      } else {
+        projBtn.title = 'Select project directory';
+      }
       projBtn.classList.remove('hidden');
+      projBtn.addEventListener('click', async () => {
+        const current = state.sourceDir || '';
+        const dir = prompt('Project path:\n(Tip: LLM can also switch via source_project tool)', current);
+        if (!dir || dir === current) return;
+        try {
+          const res = await fetch('/api/config/source-dir', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: dir }),
+          });
+          const data = await res.json();
+          if (!res.ok) { alert(data.error); return; }
+          const short = data.current.replace(/^\/home\/[^/]+/, '~');
+          state.sourceDir = short;
+          projBtn.title = 'Project: ' + short;
+          projBtn.classList.add('text-green-400');
+          setTimeout(() => projBtn.classList.remove('text-green-400'), 1500);
+        } catch (e) { alert('Failed to switch project: ' + e.message); }
+      });
+    }
+    {
+      const termBtn = document.getElementById('terminal-btn');
       if (cfg.terminal) {
-        projBtn.addEventListener('click', () => fetch('/api/terminal', { method: 'POST' }));
+        termBtn.disabled = false;
+        termBtn.className = 'text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-0.5 cursor-pointer';
+        termBtn.title = 'Terminal in project directory';
+        termBtn.addEventListener('click', () => fetch('/api/terminal', { method: 'POST' }));
       }
     }
   } catch {}

@@ -284,10 +284,20 @@
             </button>
             <button
               type="button"
-              id="project-btn"
-              class="hidden text-zinc-500 hover:text-green-400 transition-colors px-2 py-0.5 cursor-pointer"
+              id="terminal-btn"
+              class="text-zinc-700 cursor-not-allowed transition-colors px-2 py-0.5"
+              title="Terminal in project directory (set TERMINAL in .env)"
+              disabled
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="7 15 11 11 7 7"/><line x1="13" y1="15" x2="17" y2="15"/></svg>
+            </button>
+            <button
+              type="button"
+              id="project-btn"
+              title="Select project directory"
+              class="text-zinc-500 hover:text-green-400 transition-colors px-2 py-0.5 cursor-pointer"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             </button>
           </div>
           <div class="flex flex-col gap-1 shrink-0 py-1">

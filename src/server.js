@@ -72,6 +72,23 @@ app.get('/api/config', (_req, res) => {
   res.json({ location: config.location, terminal: !!config.terminal, sourceDir: config.sourceDir || '' });
 });
 
+app.post('/api/config/source-dir', async (req, res) => {
+  const { path: targetPath } = req.body;
+  if (!targetPath?.trim()) return res.status(400).json({ error: 'path is required' });
+  const expanded = targetPath.startsWith('~') ? targetPath.replace('~', process.env.HOME || '') : targetPath;
+  const full = resolve(expanded);
+  try {
+    const s = await stat(full);
+    if (!s.isDirectory()) return res.status(400).json({ error: `Not a directory: ${full}` });
+  } catch (err) {
+    if (err.code === 'ENOENT') return res.status(400).json({ error: `Directory not found: ${full}` });
+    return res.status(500).json({ error: err.message });
+  }
+  const prev = config.sourceDir;
+  config.sourceDir = full;
+  res.json({ switched: true, previous: prev || '', current: full });
+});
+
 app.post('/api/terminal', (_req, res) => {
   if (!config.terminal) return res.status(400).json({ error: 'TERMINAL not configured in .env' });
   const cwd = config.sourceDir ? resolve(config.sourceDir) : process.env.HOME;
