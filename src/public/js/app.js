@@ -513,6 +513,9 @@ let _mermaidId = 0;
 // ── Applet extraction & rendering ─────────────────────
 const APPLET_RE = /<applet\s+type=["']([^"']*)["'][^>]*>([\s\S]*?)<\/applet>/gi;
 const MAX_APPLET_SIZE = 50 * 1024; // 50KB
+const THOUGHT_LABEL = 'Thought process';
+const THOUGHT_HTML = `<span class="mr-1">💭</span> ${THOUGHT_LABEL}`;
+const WORKING_HTML = '<summary class="cursor-pointer select-none text-zinc-500 hover:text-zinc-400"><span class="mr-1">⏳</span> Working...</summary>';
 
 function extractApplets(text) {
   const applets = [];
@@ -650,11 +653,10 @@ function renderFormattedContent(text, container, { renderMermaid = false } = {})
         placeholder.replaceWith(createAppletIframe(applet));
       }
     });
-    // Expand bubble to full width when applets are present
+    // Ensure bubble fills width for applets
     const bubble = container.parentElement;
     if (bubble) {
-      bubble.classList.remove('max-w-[80%]', 'px-4');
-      bubble.classList.add('max-w-full', 'w-full', 'px-0');
+      bubble.classList.add('w-full');
     }
   }
 
@@ -782,11 +784,11 @@ function appendMessage(role, text, images, meta = {}) {
 
   const bubble = document.createElement('div');
   if (role === 'user') {
-    bubble.className = 'relative group max-w-[80%] bg-indigo-600/20 border border-indigo-500/30 text-zinc-100 rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap';
+    bubble.className = 'relative group max-w-full bg-indigo-600/20 border border-indigo-500/30 text-zinc-100 rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap';
   } else if (role === 'error') {
-    bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+    bubble.className = 'max-w-full bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
   } else {
-    bubble.className = 'max-w-[80%] bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
+    bubble.className = 'max-w-full bg-zinc-800/60 border border-zinc-700/50 text-zinc-200 rounded-xl px-4 py-3 text-sm leading-relaxed break-words';
   }
 
   // Regenerate button on user bubbles
@@ -831,7 +833,7 @@ function appendMessage(role, text, images, meta = {}) {
     details.className = 'mb-2 text-zinc-500 text-xs';
     const summary = document.createElement('summary');
     summary.className = 'cursor-pointer select-none text-zinc-500 hover:text-zinc-400';
-    summary.textContent = 'Thought process';
+    summary.textContent = THOUGHT_LABEL;
     const body = document.createElement('pre');
     body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-60 overflow-y-auto slim-scrollbar';
     body.textContent = meta.reasoning;
@@ -1032,7 +1034,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
                 const el = document.createElement('details');
                 el.className = 'mb-2 text-zinc-500 text-xs';
                 el.open = true;
-                el.innerHTML = '<summary class="cursor-pointer select-none text-zinc-500 hover:text-zinc-400"><span class="mr-1">⏳</span> Working...</summary>';
+                el.innerHTML = WORKING_HTML;
                 const body = document.createElement('pre');
                 body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
                 el.appendChild(body);
@@ -1077,7 +1079,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
               if (toolUseContainer._thinkingEl) {
                 const thinkDetails = toolUseContainer._thinkingEl.closest('details');
                 thinkDetails.open = false;
-                thinkDetails.querySelector('summary').innerHTML = '<span class="mr-1">💭</span> Thought process';
+                thinkDetails.querySelector('summary').innerHTML = THOUGHT_HTML;
                 delete toolUseContainer._thinkingEl;
               }
               trackToolUse(data.tool_use.name);
@@ -1230,11 +1232,11 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
               if (toolUseContainer._thinkingEl) {
                 const thinkDetails = toolUseContainer._thinkingEl.closest('details');
                 thinkDetails.open = false;
-                thinkDetails.querySelector('summary').innerHTML = '<span class="mr-1">💭</span> Thought process';
+                thinkDetails.querySelector('summary').innerHTML = THOUGHT_HTML;
                 delete toolUseContainer._thinkingEl;
               }
-              if (hasReasoning && reasoningSummary.textContent !== 'Thought process') {
-                reasoningSummary.textContent = 'Thought process';
+              if (hasReasoning && reasoningSummary.textContent !== THOUGHT_LABEL) {
+                reasoningSummary.textContent = THOUGHT_LABEL;
                 addRefineButton(reasoningDetails, () => content, () => accumulatedReasoning);
               }
               accumulated += data.content;
@@ -1247,7 +1249,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
             }
             if (data.error) {
               bubble.textContent = `[Error: ${data.error}]`;
-              bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+              bubble.className = 'max-w-full bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
             }
           } catch { /* skip malformed */ }
         }
@@ -1256,7 +1258,7 @@ async function sendMessage(content, images, { sessionInit = false } = {}) {
   } catch (err) {
     if (err.name !== 'AbortError') {
       bubble.textContent = `[Error: ${err.message}]`;
-      bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+      bubble.className = 'max-w-full bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
     }
   } finally {
     clearTimeout(_renderTimer);
@@ -1402,7 +1404,7 @@ async function sendTasks(tasks, displayText) {
                 renderFormattedContent(currentSection.accumulated, currentSection.contentSpan);
               }
               if (currentSection?.hasReasoning && currentSection.reasoningDetails) {
-                currentSection.reasoningDetails.querySelector('summary').textContent = 'Thought process';
+                currentSection.reasoningDetails.querySelector('summary').textContent = THOUGHT_LABEL;
               }
               currentSection = null;
             }
@@ -1491,7 +1493,7 @@ async function sendTasks(tasks, displayText) {
                 const el = document.createElement('details');
                 el.className = 'mb-2 text-zinc-500 text-xs';
                 el.open = true;
-                el.innerHTML = '<summary class="cursor-pointer select-none text-zinc-500 hover:text-zinc-400"><span class="mr-1">⏳</span> Working...</summary>';
+                el.innerHTML = WORKING_HTML;
                 const body = document.createElement('pre');
                 body.className = 'mt-1 whitespace-pre-wrap text-zinc-600 max-h-40 overflow-y-auto slim-scrollbar';
                 el.appendChild(body);
@@ -1517,7 +1519,7 @@ async function sendTasks(tasks, displayText) {
               if (currentSection.toolContainer._thinkingEl) {
                 const thinkDetails = currentSection.toolContainer._thinkingEl.closest('details');
                 thinkDetails.open = false;
-                thinkDetails.querySelector('summary').innerHTML = '<span class="mr-1">💭</span> Thought process';
+                thinkDetails.querySelector('summary').innerHTML = THOUGHT_HTML;
                 delete currentSection.toolContainer._thinkingEl;
               }
               // Remove status messages
@@ -1583,7 +1585,7 @@ async function sendTasks(tasks, displayText) {
               if (currentSection.toolContainer._thinkingEl) {
                 const thinkDetails = currentSection.toolContainer._thinkingEl.closest('details');
                 thinkDetails.open = false;
-                thinkDetails.querySelector('summary').innerHTML = '<span class="mr-1">💭</span> Thought process';
+                thinkDetails.querySelector('summary').innerHTML = THOUGHT_HTML;
                 delete currentSection.toolContainer._thinkingEl;
               }
               currentSection.accumulated += data.content;
@@ -1610,7 +1612,7 @@ async function sendTasks(tasks, displayText) {
   } catch (err) {
     if (err.name !== 'AbortError') {
       bubble.textContent = `[Error: ${err.message}]`;
-      bubble.className = 'max-w-[80%] bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
+      bubble.className = 'max-w-full bg-red-600/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 text-sm leading-relaxed';
     }
   } finally {
     clearTimeout(_renderTimer);
