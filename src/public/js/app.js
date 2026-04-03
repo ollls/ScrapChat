@@ -215,6 +215,8 @@ stopBtn.addEventListener('click', () => {
 responseArea.addEventListener('click', (e) => {
   const sel = window.getSelection();
   if (sel && sel.toString().trim().length > 0) return; // text was selected, don't interfere
+  // Skip buttons, summaries, interactive elements, and their children
+  if (e.target.closest('button, summary, a, details > summary, iframe, svg, .refine-btn')) return;
   // Only capture from assistant bubbles (not user bubbles or other elements)
   const node = e.target.closest && e.target.closest('.justify-start > div');
   if (!node || !responseArea.contains(node)) return;
@@ -392,10 +394,10 @@ function renderSidebar() {
       }
     });
 
-    // Compact button — only for pinned conversations with messages AND a compact prompt for this color
+    // Compact button — for conversations with messages AND a compact prompt for this color
     let compactBtn = null;
     const convColor = state.sessionColors[conv.id];
-    if (conv.pinned && (conv.messageCount || 0) > 2 && convColor && state.compactColors.has(convColor)) {
+    if ((conv.messageCount || 0) > 0 && convColor && state.compactColors.has(convColor)) {
       compactBtn = document.createElement('button');
       compactBtn.className = 'text-zinc-600 hover:text-cyan-400 px-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 cursor-pointer';
       compactBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/></svg>';
@@ -411,6 +413,7 @@ function renderSidebar() {
           if (conv.id === state.currentConversationId) {
             const updated = await api.getConversation(conv.id);
             renderMessages(updated.messages);
+            updateContextBar(updated.tokenCount);
           }
           await refreshSidebar();
         } else {
@@ -670,8 +673,12 @@ function renderFormattedContent(text, container, { renderMermaid = false } = {})
         div.className = 'mermaid-chart';
         div.innerHTML = svg;
         pre.replaceWith(div);
-      } catch {
-        // leave as code block if mermaid fails to parse
+      } catch (err) {
+        console.warn('Mermaid render failed:', err.message || err);
+        const errDiv = document.createElement('div');
+        errDiv.className = 'mermaid-error';
+        errDiv.textContent = `⚠ Mermaid: ${err.message || err}`;
+        pre.after(errDiv);
       }
     });
   }
@@ -3596,7 +3603,8 @@ saveCompactBtn.addEventListener('click', async () => {
     });
     input.value = '';
     input.style.height = 'auto';
-    refreshCompacts();
+    await refreshCompacts();
+    renderSidebar();
   } finally {
     saveCompactBtn.disabled = false;
     saveCompactBtn.style.opacity = '';
@@ -3705,7 +3713,8 @@ saveCompactBtn.addEventListener('click', async () => {
   updateInputLock();
   refreshPrompts();
   refreshSessions();
-  refreshCompacts();
+  await refreshCompacts();
+  renderSidebar();
   refreshTasks();
   pollLLM();
   setInterval(pollLLM, 5000);

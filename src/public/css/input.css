@@ -139,6 +139,13 @@
 }
 
 /* Mermaid charts */
+.mermaid-error {
+  font-size: 0.75rem;
+  color: #f87171;
+  padding: 0.25rem 0.5rem;
+  margin-top: 0.25rem;
+  opacity: 0.85;
+}
 .mermaid-chart {
   margin: 0.75rem 0;
   overflow-x: auto;
