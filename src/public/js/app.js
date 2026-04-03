@@ -653,8 +653,8 @@ function renderFormattedContent(text, container, { renderMermaid = false } = {})
     // Expand bubble to full width when applets are present
     const bubble = container.parentElement;
     if (bubble) {
-      bubble.classList.remove('max-w-[80%]');
-      bubble.classList.add('max-w-full', 'w-full');
+      bubble.classList.remove('max-w-[80%]', 'px-4');
+      bubble.classList.add('max-w-full', 'w-full', 'px-0');
     }
   }
 
