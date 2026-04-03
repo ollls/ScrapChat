@@ -1,5 +1,11 @@
 [
   {
+    "id": "11060956-57f0-40c2-9154-57b62acac027",
+    "title": "Solar System SVG Visualization Guide",
+    "text": "Generate a horizontal SVG visualization of the solar system centered on the screen. Place the Sun in the middle and draw 8 concentric circular orbits around it. Position the 8 planets on these orbits according to their approximate real-world orbital phases for current date.\n\nFor planet sizes, do not use true scale. Instead, use a simplified relative sizing where gas giants (Jupiter, Saturn) are visibly larger than terrestrial planets, but keep the visual difference subtle to maintain a clean look. Ensure Mercury is the smallest and Jupiter is the largest among the planets.\n\nOnly display the Sun, the planets, and their orbital circles. Use distinct colors for each planet and a bright yellow/orange for the Sun. Do not include labels, star fields, or other celestial bodies.",
+    "createdAt": "2026-04-03T02:55:33.359Z"
+  },
+  {
     "id": "f59f128e-63fe-4dab-9788-18c7202fb3e2",
     "title": "SVG Solar System Diagram",
     "text": "Draw an SVG of a solar system with the sun in the center and 4 planets orbiting it. Use circles with different colors and sizes. Add labels. Use applet SVG.",

@@ -1,5 +1,11 @@
 [
   {
+    "id": "3803fbad-00e8-440a-aa1c-4a1c6474d2ac",
+    "title": "Solar System SVG Visualization With Orbits",
+    "text": "- Generate a horizontal SVG visualization of the solar system with the Sun centered and 8 concentric circular orbits\n- Calculate the approximate orbital phase angles for all 8 planets based on the current date\n- Render the Sun as a bright yellow/orange circle and the 8 planets on their respective orbits using distinct colors and simplified relative sizing (Mercury smallest, Jupiter largest, subtle differences)",
+    "createdAt": "2026-04-03T03:04:23.858Z"
+  },
+  {
     "id": "6bf14f65-cef7-4d98-bfc6-54257172392b",
     "title": "AMD May 2026 Option Delta Filter",
     "text": "- get AMD current price and option expiration dates for May 2026\n- fetch AMD call option chain for the earliest May expiry, set strikePriceNear 15% above current price, save to file\n- read the saved CSV, filter to delta less than 0.30, output markdown table with strike, bid, ask, delta, theta, gamma, IV",
