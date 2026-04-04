@@ -17,7 +17,7 @@ export default {
     maxContextTokens: parseInt(process.env.LLAMA_MAX_CONTEXT || '131072', 10),
   },
   search: {
-    engine: process.env.SEARCH_ENGINE || 'keiro', // 'google', 'duckduckgo', 'keiro', 'tavily', or 'both'
+    engine: process.env.SEARCH_ENGINE || 'keiro', // 'duckduckgo', 'keiro', 'tavily', or 'both'
   },
   tavily: {
     apiKey: process.env.TAVILY_API_KEY || '',
