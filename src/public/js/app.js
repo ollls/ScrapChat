@@ -1755,16 +1755,15 @@ async function pollLLM() {
 function renderLLMDropdown() {
   llmDropdown.innerHTML = '';
   for (const b of llmBackends) {
+    if (!b.configured) continue;
     const item = document.createElement('button');
     item.className = `w-full text-left px-3 py-1.5 text-xs transition-colors ${
       b.active
         ? 'text-indigo-400 bg-indigo-500/10'
-        : b.configured
-          ? 'text-zinc-300 hover:bg-zinc-700'
-          : 'text-zinc-600 cursor-not-allowed'
+        : 'text-zinc-300 hover:bg-zinc-700'
     }`;
-    item.textContent = b.label + (b.active ? ' \u2713' : !b.configured ? ' (no key)' : '');
-    if (!b.active && b.configured) {
+    item.textContent = b.label + (b.active ? ' \u2713' : '');
+    if (!b.active) {
       item.addEventListener('click', () => switchLLMBackend(b.id));
     }
     llmDropdown.appendChild(item);
@@ -1818,7 +1817,7 @@ async function pollSearch() {
     const res = await fetch('/api/health/search');
     const { ok, engine, engines } = await res.json();
     searchDot.className = `inline-block w-2 h-2 rounded-full ${ok ? 'bg-green-500 pulse-dot' : 'bg-red-500'}`;
-    searchLabel.textContent = engine ? `${engine} Search` : 'Search';
+    searchLabel.textContent = engine || 'Search';
     searchToggle.className = `flex items-center gap-1 transition-colors ${ok ? 'text-green-500 hover:text-green-400' : 'text-red-400 hover:text-red-300'}`;
     if (engines) searchEngines = engines;
   } catch {
@@ -1831,16 +1830,15 @@ async function pollSearch() {
 function renderSearchDropdown() {
   searchDropdown.innerHTML = '';
   for (const eng of searchEngines) {
+    if (!eng.configured) continue;
     const item = document.createElement('button');
     item.className = `w-full text-left px-3 py-1.5 text-xs transition-colors ${
       eng.active
         ? 'text-indigo-400 bg-indigo-500/10'
-        : eng.configured
-          ? 'text-zinc-300 hover:bg-zinc-700'
-          : 'text-zinc-600 cursor-not-allowed'
+        : 'text-zinc-300 hover:bg-zinc-700'
     }`;
-    item.textContent = eng.label + (eng.active ? ' ✓' : !eng.configured ? ' (no key)' : '');
-    if (!eng.active && eng.configured) {
+    item.textContent = eng.label + (eng.active ? ' ✓' : '');
+    if (!eng.active) {
       item.addEventListener('click', () => switchSearchEngine(eng.id));
     }
     searchDropdown.appendChild(item);
