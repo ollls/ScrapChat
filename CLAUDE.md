@@ -427,8 +427,7 @@ Full coding assistance suite scoped to `SOURCE_DIR`. All path-based tools enforc
 - `extractApplets(text)` — regex-extracts `<applet>` blocks (single or double quotes on `type` attr) BEFORE DOMPurify (which strips deprecated `<applet>` tags), replaces with `<div data-applet="N">` placeholders that survive marked.parse + DOMPurify
 - `createAppletIframe(applet)` — builds sandboxed iframe (`sandbox="allow-scripts allow-same-origin"`), auto-injects Chart.js for `type="chartjs"`, auto-injects resize script (ResizeObserver + image load listeners + MutationObserver), validates content (`type="html"` always valid; others must contain `<script>`/`<svg>`/`<canvas>`), enforces 50KB cap, falls back to collapsible code block
 - `renderFormattedContent()` — calls extractApplets first, runs cleaned text through marked+DOMPurify, then replaces placeholders with iframes
-- Global `message` listener for iframe resize (100-20000px height cap, scroll fallback when exceeded)
-- Resize measurement: temporarily sets `overflow:visible` on body to get true `scrollHeight`, then restores
+- Global `message` listener for iframe resize (100-20000px height cap, scroll fallback when exceeded). Height guards on both sides (iframe skips postMessage, parent skips style update) to prevent feedback loops
 - Streaming safety: partial `<applet>` tags don't match regex (needs both open+close), render as text until final render
 
 **Context management** (conversations.js): Assistant messages in history have `<applet>...</applet>` blocks replaced with `[Applet: TYPE visualization]` before sending to LLM, preserving stored content for frontend re-rendering.
@@ -481,7 +480,7 @@ Pin button (📌) in sidebar persists conversations to disk across server restar
 - Search engine switchable at runtime via POST `/api/health/search`
 - Applet HTML in assistant messages stripped from LLM history context (replaced with `[Applet: TYPE visualization]`), kept in stored messages for frontend re-rendering
 - `run_command` uses async `exec` (non-blocking event loop) instead of `execSync`
-- Applet bubble width: `contentSpan` appended to bubble BEFORE `renderFormattedContent()` so parent traversal works for `max-w-[80%]` removal
+- Applet bubble width: `contentSpan` appended to bubble BEFORE `renderFormattedContent()` so parent traversal works for `max-w-[85%]` removal
 - `HELP.md` — user-facing guide in plain language (no technical internals)
 
 ## Conventions
