@@ -3,6 +3,15 @@ import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
 import config from '../config.js';
 
+let _gotScraping;
+async function getGotScraping() {
+  if (!_gotScraping) {
+    _gotScraping = (await import('got-scraping')).gotScraping;
+  }
+  return _gotScraping;
+}
+
+
 // ── Search engine backends ───────────────────────────
 async function searchTavily(query) {
   const res = await fetch('https://api.tavily.com/search', {
@@ -40,6 +49,38 @@ async function searchKeiro(query) {
   return { results: results.slice(0, 5).map(r => ({ title: r.title || '', url: r.url || '', description: r.snippet || '' })) };
 }
 
+async function searchDDG(query) {
+  const gotScraping = await getGotScraping();
+  const res = await gotScraping({
+    url: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+    headerGeneratorOptions: { browsers: ['chrome'], operatingSystems: ['linux'], devices: ['desktop'] },
+    timeout: { request: 15000 },
+    followRedirect: true,
+  });
+  const { document } = parseHTML(res.body);
+  const results = [];
+  for (const el of document.querySelectorAll('.result')) {
+    const anchor = el.querySelector('.result__a');
+    const snippet = el.querySelector('.result__snippet');
+    if (!anchor) continue;
+    const href = anchor.getAttribute('href') || '';
+    // DDG wraps URLs through //duckduckgo.com/l/?uddg=...
+    const match = href.match(/uddg=([^&]+)/);
+    const finalUrl = match ? decodeURIComponent(match[1]) : href;
+    if (!finalUrl || finalUrl.startsWith('/')) continue;
+    results.push({
+      title: anchor.textContent?.trim() || '',
+      url: finalUrl,
+      description: snippet?.textContent?.trim() || '',
+    });
+    if (results.length >= 5) break;
+  }
+  if (!results.length) {
+    return { error: 'No results parsed (DDG may have changed layout or blocked)', results: [] };
+  }
+  return { results };
+}
+
 export default {
   group: 'web',
   status: {
@@ -59,6 +100,10 @@ export default {
       parameters: { query: 'string' },
       execute: async ({ query }) => {
         const engine = config.search.engine;
+        if (engine === 'duckduckgo') {
+          const res = await searchDDG(query).catch(e => ({ error: e.message, results: [] }));
+          return { ...res, sources: 'DuckDuckGo' };
+        }
         if (engine === 'tavily') {
           const res = await searchTavily(query).catch(e => ({ error: e.message, results: [] }));
           return { ...res, sources: 'Tavily' };
@@ -94,12 +139,24 @@ export default {
       description: 'Fetch a web page and extract its full content as markdown. Requires a "url" argument. ALWAYS use after web_search to read the most relevant result before answering.',
       parameters: { url: 'string' },
       execute: async ({ url }) => {
-        const res = await fetch(url, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LLM-Workbench/1.0)' },
-          redirect: 'follow',
-          signal: AbortSignal.timeout(10000),
-        });
-        const html = await res.text();
+        let html;
+        if (config.stealthFetch) {
+          const gotScraping = await getGotScraping();
+          const res = await gotScraping({
+            url,
+            headerGeneratorOptions: { browsers: ['chrome'], operatingSystems: ['linux'], devices: ['desktop'] },
+            timeout: { request: 15000 },
+            followRedirect: true,
+          });
+          html = res.body;
+        } else {
+          const res = await fetch(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; LLM-Workbench/1.0)' },
+            redirect: 'follow',
+            signal: AbortSignal.timeout(10000),
+          });
+          html = await res.text();
+        }
         const { document } = parseHTML(html);
 
         const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });

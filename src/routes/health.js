@@ -24,6 +24,7 @@ router.get('/internet', async (_req, res) => {
 });
 
 const ENGINES = {
+  duckduckgo: { label: 'DuckDuckGo', configured: () => !!config.stealthFetch },
   keiro: { label: 'Keiro', configured: () => !!config.keiro.apiKey },
   tavily: { label: 'Tavily', configured: () => !!config.tavily.apiKey },
   both: { label: 'Both', configured: () => !!config.keiro.apiKey && !!config.tavily.apiKey },
@@ -32,6 +33,10 @@ const ENGINES = {
 // Zero-credit health check: send empty/missing query, check that key is accepted.
 // Valid key → 422 (Tavily) or 400 (Keiro); invalid key → 401/403.
 async function pingEngine(engine) {
+  if (engine === 'duckduckgo') {
+    const resp = await fetch('https://html.duckduckgo.com/', { signal: AbortSignal.timeout(5000) });
+    return resp.ok;
+  }
   let resp;
   if (engine === 'tavily') {
     resp = await fetch('https://api.tavily.com/search', {
