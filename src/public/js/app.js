@@ -570,9 +570,9 @@ function createAppletIframe(applet) {
   // Inject auto-resize script if no postMessage present
   if (!html.includes('postMessage')) {
     const resizeScript = `<script>
-function _rsz(){var d=document.documentElement,b=document.body,h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight)+2;document.querySelectorAll('svg').forEach(function(s){var r=s.getBoundingClientRect();var bot=r.top+r.height;if(bot>h)h=Math.ceil(bot)+2;});window.parent.postMessage({type:'resize',height:h},'*');}
+var _lastH=0;function _rsz(){var d=document.documentElement,b=document.body,h=Math.max(b.scrollHeight,b.offsetHeight,d.scrollHeight)+2;document.querySelectorAll('svg').forEach(function(s){var r=s.getBoundingClientRect();var bot=r.top+r.height;if(bot>h)h=Math.ceil(bot)+2;});if(Math.abs(h-_lastH)<2)return;_lastH=h;window.parent.postMessage({type:'resize',height:h},'*');}
 new ResizeObserver(_rsz).observe(document.body);
-window.addEventListener('load',function(){_rsz();setTimeout(_rsz,100);setTimeout(_rsz,500);});
+window.addEventListener('load',function(){setTimeout(_rsz,100);});
 document.querySelectorAll('img').forEach(i=>{i._rsz=1;i.complete?_rsz():i.addEventListener('load',_rsz);});
 new MutationObserver(()=>{document.querySelectorAll('img').forEach(i=>{if(!i._rsz){i._rsz=1;i.addEventListener('load',_rsz);}});}).observe(document.body,{childList:true,subtree:true});
 <\/script>`;
@@ -631,6 +631,8 @@ window.addEventListener('message', (e) => {
   const height = Math.max(100, Math.min(MAX_IFRAME_H, e.data.height));
   document.querySelectorAll('.applet-iframe').forEach(iframe => {
     if (iframe.contentWindow === e.source) {
+      const current = parseInt(iframe.style.height) || 0;
+      if (Math.abs(current - height) < 2) return; // skip if unchanged — prevents resize loop
       iframe.style.height = height + 'px';
       iframe.style.overflow = e.data.height > MAX_IFRAME_H ? 'auto' : 'hidden';
     }
@@ -653,9 +655,10 @@ function renderFormattedContent(text, container, { renderMermaid = false } = {})
         placeholder.replaceWith(createAppletIframe(applet));
       }
     });
-    // Ensure bubble fills width for applets
+    // Ensure bubble fills width for applets — remove max-width constraint
     const bubble = container.parentElement;
     if (bubble) {
+      bubble.classList.remove('max-w-[85%]');
       bubble.classList.add('w-full');
     }
   }
