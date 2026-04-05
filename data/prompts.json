@@ -24,12 +24,6 @@
     "createdAt": "2026-03-24T02:01:03.553Z"
   },
   {
-    "id": "c94e632a-b81e-444e-afce-8fa3e3b37461",
-    "title": "Display ETRADE Portfolio Dashboard",
-    "text": "Fetch ETRADE portfolio for all accounts with saveAs (e.g. portfolio_IRA.json). Update FILES array in the template with the saved filenames. [template: Portfolio Dashboard]",
-    "createdAt": "2026-03-26T16:32:35.465Z"
-  },
-  {
     "id": "a24b13de-4870-4199-9a01-6677c14792e7",
     "title": "JavaScript Analog Watch Timer",
     "text": "Show analog timer watch, setup time, it should count from now, with JavaScript.[template: Beautiful Watch]",
@@ -66,22 +60,28 @@
     "createdAt": "2026-03-21T18:32:29.283Z"
   },
   {
-    "id": "6ce60c3e-b1f6-4204-98e0-f9bb5039a3d3",
-    "title": "Etrade Account Balances Display",
-    "text": "Show my ETRADE accounts balances, show output as applet HTML, CLEAN, BIG, SIMPLE, DARK MODE.",
-    "createdAt": "2026-03-21T17:46:35.394Z"
-  },
-  {
     "id": "1e435b0b-ec60-4be5-a75f-eccabfc361de",
     "title": "Stock Option Chain Dashboard Template",
     "text": "Use HTML applet BIG, CLEAN, SIMPLE look and feel. Generate option chain dashboard for {$Ticker} stock. Period {$Period:daterange}. Use applet template - [template: Option Chain]",
     "createdAt": "2026-03-21T02:49:37.733Z"
   },
   {
+    "id": "c94e632a-b81e-444e-afce-8fa3e3b37461",
+    "title": "Display ETRADE Portfolio Dashboard",
+    "text": "Fetch ETRADE portfolio for all accounts with saveAs (e.g. portfolio_IRA.json). Update FILES array in the template with the saved filenames. [template: Portfolio Dashboard]",
+    "createdAt": "2026-03-26T16:32:35.465Z"
+  },
+  {
     "id": "827f7ee6-4445-4392-a62f-2b093182f8ab",
     "title": "ETRADE Balance View with HTML Applet",
     "text": "Show my ETRADE accounts balances, use HTML applet and best look and feel practices.",
     "createdAt": "2026-03-20T20:31:00.634Z"
+  },
+  {
+    "id": "6ce60c3e-b1f6-4204-98e0-f9bb5039a3d3",
+    "title": "Etrade Account Balances Display",
+    "text": "Show my ETRADE accounts balances, show output as applet HTML, CLEAN, BIG, SIMPLE, DARK MODE.",
+    "createdAt": "2026-03-21T17:46:35.394Z"
   },
   {
     "id": "c151b8b3-681b-453e-bce1-b4476adfe1b7",
