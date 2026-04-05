@@ -76,6 +76,7 @@ async function searchDDG(query) {
     if (results.length >= 5) break;
   }
   if (!results.length) {
+    console.warn('[web_search] DDG returned no parseable results (layout change or blocked)');
     return { error: 'No results parsed (DDG may have changed layout or blocked)', results: [] };
   }
   return { results };
@@ -101,21 +102,21 @@ export default {
       execute: async ({ query }) => {
         const engine = config.search.engine;
         if (engine === 'duckduckgo') {
-          const res = await searchDDG(query).catch(e => ({ error: e.message, results: [] }));
+          const res = await searchDDG(query).catch(e => { console.warn(`[web_search] DDG error: ${e.message}`); return { error: e.message, results: [] }; });
           return { ...res, sources: 'DuckDuckGo' };
         }
         if (engine === 'tavily') {
-          const res = await searchTavily(query).catch(e => ({ error: e.message, results: [] }));
+          const res = await searchTavily(query).catch(e => { console.warn(`[web_search] Tavily error: ${e.message}`); return { error: e.message, results: [] }; });
           return { ...res, sources: 'Tavily' };
         }
         if (engine === 'keiro') {
-          const res = await searchKeiro(query).catch(e => ({ error: e.message, results: [] }));
+          const res = await searchKeiro(query).catch(e => { console.warn(`[web_search] Keiro error: ${e.message}`); return { error: e.message, results: [] }; });
           return { ...res, sources: 'Keiro' };
         }
         // 'both' — run in parallel, merge and deduplicate by URL
         const [keiro, tavily] = await Promise.all([
-          searchKeiro(query).catch(e => ({ error: e.message, results: [] })),
-          searchTavily(query).catch(e => ({ error: e.message, results: [] })),
+          searchKeiro(query).catch(e => { console.warn(`[web_search] Keiro error: ${e.message}`); return { error: e.message, results: [] }; }),
+          searchTavily(query).catch(e => { console.warn(`[web_search] Tavily error: ${e.message}`); return { error: e.message, results: [] }; }),
         ]);
         const keiroOk = keiro.results.length > 0;
         const tavilyOk = tavily.results.length > 0;
