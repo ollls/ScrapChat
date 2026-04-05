@@ -35,8 +35,8 @@ async function getBrowser() {
   if (!executablePath) throw new Error('No Chrome/Chromium found. Set CHROME_PATH env var or install google-chrome.');
   _browser = await launch({
     executablePath,
-    headless: 'shell',
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled'],
   });
   return _browser;
 }
@@ -153,7 +153,11 @@ async function fetchBrowser(url) {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 15000 });
+    await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36');
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    });
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 20000 });
     return await page.content();
   } finally {
     await page.close();
